@@ -1,0 +1,67 @@
+name: METRIC Windows native baseline
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/native-baseline.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Authenticate and extract build inputs
+        run: |
+          $archive = Join-Path $PWD 'source.zip'
+          $expected = 'c28f62389d6813b4edb54e6db6141b15b37fde5acf609cdf05b8324ed3aed04f'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) {
+            throw 'Source archive does not match the verified Git LFS object.'
+          }
+          $inputs = Join-Path $env:RUNNER_TEMP 'metric-inputs'
+          python -m zipfile -e $archive $inputs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $stock = Join-Path $inputs 'stock-original-os.ldr'
+          if ((Get-FileHash $stock -Algorithm SHA256).Hash -ne '60358afdaa9b58ed40411602f6d5d4e1e3e02553ff2da7e25038e71dd002b52f') {
+            throw 'Stock OP-XY 1.2.1 image hash mismatch.'
+          }
+      - name: Authenticate the pinned Blackfin toolchain
+        run: |
+          Set-Location (Join-Path $env:RUNNER_TEMP 'metric-inputs/open-xy')
+          python sdk.py toolchain fetch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python sdk.py doctor --toolchain
+      - name: Build METRIC v0.8 and independently verify the package
+        run: |
+          $inputs = Join-Path $env:RUNNER_TEMP 'metric-inputs'
+          $stock = Join-Path $inputs 'stock-original-os.ldr'
+          $output = Join-Path $env:RUNNER_TEMP 'metric-native-baseline'
+          Set-Location (Join-Path $inputs 'open-xy')
+          python sdk.py build --collection local/catalog/metric-collection.json --machine ../METRIC-v0.8-hardware-probe --layout local/METRIC-layout-standard-memory.json --stock-os $stock --profiling on --sweep on --out $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python sdk.py verify --package $output --stock-os $stock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash (Join-Path $output 'candidate/os.ldr') -Algorithm SHA256
+      - name: Archive layout and verification reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: metric-v0.8-windows-verification
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/metric-native-baseline/layout.json
+            ${{ runner.temp }}/metric-native-baseline/manifest.json
+            ${{ runner.temp }}/metric-native-baseline/verification.json
