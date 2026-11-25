@@ -1,0 +1,49 @@
+name: METRIC Windows preflight
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Check out source with Git LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Inspect source archive and tooling
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import zipfile
+          path = Path('source.zip')
+          print('Archive:', path.resolve())
+          print('Size (bytes):', path.stat().st_size)
+          with zipfile.ZipFile(path) as z:
+              names = z.namelist()
+              print('Number of entries:', len(names))
+              markers = ('sdk.py', 'machine.json', 'metric-collection', 'stock-original-os.ldr', 'METRIC-layout', 'metric_engine.hpp', 'punch_transport.hpp', '.github/workflows/')
+              hits = [n for n in names if any(m.lower() in n.lower() for m in markers)]
+              print('Relevant paths (first 120):')
+              for n in hits[:120]:
+                  info = z.getinfo(n)
+                  print(f'  {info.file_size:>11}  {n}')
+              print('Top-level paths (first 40):')
+              for n in sorted({n.split('/')[0] for n in names})[:40]:
+                  print(' ', n)
+              if not any(n.endswith('sdk.py') for n in names):
+                  raise SystemExit('FAIL: sdk.py not found; inspect archive structure')
+              if not any('punch_transport.hpp' in n for n in names):
+                  raise SystemExit('FAIL: PUNCH files not found')
+          print('PASS: archive inspected; no firmware was built or installed')
+          '@ | python -
