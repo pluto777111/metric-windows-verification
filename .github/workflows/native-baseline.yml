@@ -51,7 +51,23 @@ jobs:
           $stock = Join-Path $inputs 'stock-original-os.ldr'
           $output = Join-Path $env:RUNNER_TEMP 'metric-native-baseline'
           Set-Location (Join-Path $inputs 'open-xy')
-          python sdk.py build --collection local/catalog/metric-collection.json --machine ../METRIC-v0.8-hardware-probe --layout local/METRIC-layout-standard-memory.json --stock-os $stock --profiling on --sweep on --out $output
+          @'
+          import json
+          from pathlib import Path
+
+          from tooling.catalog import OFFICIAL
+          from tooling.machines import machine_at
+
+          catalog = Path('local/catalog')
+          collection = json.loads((catalog / 'metric-collection.json').read_text(encoding='utf-8'))
+          collection['machines'] = [
+              entry for entry in collection['machines']
+              if machine_at(catalog / entry['path']).id in OFFICIAL
+          ]
+          (catalog / 'metric-native-baseline.json').write_text(json.dumps(collection), encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python sdk.py build --collection local/catalog/metric-native-baseline.json --machine ../METRIC-v0.8-hardware-probe --layout local/METRIC-layout-standard-memory.json --stock-os $stock --profiling on --sweep on --out $output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python sdk.py verify --package $output --stock-os $stock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
