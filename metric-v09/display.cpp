@@ -1,5 +1,6 @@
 #include <opxy/track_control.hpp>
 #include "display.h"
+#include "output_pitch.hpp"
 #include "metric_visual.hpp"
 namespace metric {
 using namespace opxy::draw;
@@ -20,6 +21,8 @@ inline unsigned decode(opxy::i32 raw,unsigned choices){
 }
 inline void display_reset(DisplayState& state){state.header.reset();}
 inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& frame){
+  const auto page=opxy::control::from_control(9);
+  const bool audition=page>=2;
   char values[8][header_capacity];
   const char* names[8];
   const unsigned choices[8]={0,0,16,6,3,0,8,8};
@@ -33,6 +36,16 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
     if(i==3)copy(values[i],header_capacity,phrases[v]);
     else if(i==4)copy(values[i],header_capacity,ratios[v]);
     else number(values[i],v+(i>=6?1:0));
+  }
+  if(audition) {
+    static const char* const modes[3]={"DRUM","TONAL","LOCK"};
+    static const char* const scales[6]={"MAJOR","MINOR","DORIAN","MIXOLYD","PHRYG","HARM MIN"};
+    static const char* const roots[12]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    names[0]="distance"; names[1]="tension"; names[2]="space";
+    names[3]="scale"; names[4]="output"; names[5]="root";
+    copy(values[3],header_capacity,knobs[4]==2 ? scales[knobs[3]] : "-");
+    copy(values[4],header_capacity,modes[knobs[4]]);
+    copy(values[5],header_capacity,knobs[4]>0 ? roots[root_from_percent(knobs[5])] : "-");
   }
   page_header(state.header,input,frame,names,values,0);
   metric_core::Settings s;
@@ -57,8 +70,6 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
   metric_core::generate(s,bar_index,bar);
   const auto pattern=metric_visual::exact(bar,s);
 
-  const auto page=opxy::control::from_control(9);
-  const bool audition=page>=2;
   text(frame,16,12*unit,55*unit,unit,
        page==3 ? "METRIC / INTERPLAY AUDITION" :
        audition ? "METRIC / PHRASE AUDITION" : "METRIC   /   TWO CLOCKS");

@@ -2,6 +2,7 @@
 
 #include "example.hpp"
 #include "track_feed.hpp"
+#include "output_pitch.hpp"
 
 namespace metric {
 
@@ -39,9 +40,15 @@ inline void audition_phrase(Performance& performance, const metric_core::Setting
         {Mode::transform, Journey::smooth, master.morph, 0, master.density},
         bar * metric_core::BAR_TICKS);
     const auto& frame = performance.phrases.frame();
-    constexpr uint8_t minor[] = {0, 2, 3, 5, 7, 8, 10};
+    const auto mode=static_cast<OutputMode>(master.ratio);
+    const unsigned root=root_from_percent(master.ratchet);
+    const unsigned scale=scale_from_bars(master.phrase_bars);
     if (performance.page==3) {
-        metric_core::generate(master,bar,output);
+        auto rhythm=master;
+        rhythm.ratio=0;
+        rhythm.ratchet=0;
+        rhythm.phrase_bars=4;
+        metric_core::generate(rhythm,bar,output);
         // Audition how the rhythm sits around the instrument phrase.
         // The instrument keeps its own timing. Rotation chooses the distance
         // from the nearest phrase onset at which rhythm hits make room.
@@ -62,7 +69,7 @@ inline void audition_phrase(Performance& performance, const metric_core::Setting
         const auto& answer = frame.material.answer.notes[index];
         if (int(index) != frame.omitted)
             metric_core::insert(output, Session::onset(frame.material, index) * 24,
-                                master.target_b, 48 + minor[answer.degree],
+                                master.target_b, output_pitch(mode,answer.degree,root,scale),
                                 answer.accent ? 105 : 77, 20);
     }
 }

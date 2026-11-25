@@ -28,6 +28,7 @@ int main() {
   opxy::control::Overlay overlay{};
   input.track=12;
   input.page_key=2;
+  input.values[12][4]=static_cast<opxy::i32>(27306u<<16);
   input.transport.playing=1;
   control(state,input,overlay);
   assert(overlay.display[9]==2);
@@ -39,8 +40,15 @@ int main() {
   assert(overlay.display[9]==3);
   assert(state.bar.count>6);
   input.page_key=1;
+  input.values[12][4]=0;
   input.transport.ticks96=768;
   control(state,input,overlay);
   assert(overlay.display[9]==1);
+  assert(output_pitch(OutputMode::drum,1,11,5)==38);
+  assert(output_pitch(OutputMode::tonal,1,7,5)==56);
+  assert(output_pitch(OutputMode::scale_lock,2,7,0)==59);
+  assert(output_pitch(OutputMode::scale_lock,2,7,1)==58);
+  assert(output_pitch(OutputMode::scale_lock,6,0,5)==59);
+  assert(root_from_percent(100)==11 && scale_from_bars(32)==5);
   for (unsigned i=0;i<state.bar.count;++i) assert(state.bar.events[i].pitch<48);
 }
