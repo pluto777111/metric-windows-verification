@@ -1,0 +1,76 @@
+--- a/sdk/include/opxy/track_control.hpp
++++ b/sdk/include/opxy/track_control.hpp
+@@ -59,6 +59,11 @@
+ // detent, up to 8 either way when turned fast.
+ struct Turn { u8 slot, reserved; i16 direction; };
+ 
++// A note from a programmed one-bar, scale-1 instrument pattern, in
++// 96-PPQN ticks. This optional controller callback never edits the pattern.
++struct PatternEvent { u32 tick, length; u8 pitch, velocity; };
++using ReadPattern = bool (*)(u32 track, PatternEvent* events, u32 capacity, u32& count);
++
+ struct Input {
+     u32 track;  // the aux track this machine holds (zero-based)
+     // Each track's live values as stock sets them (sequenced, locked or
+@@ -86,6 +91,7 @@
+     // track turned keeps its turns between ticks.
+     u32 turn_count;
+     Turn turns[turn_capacity];
++    ReadPattern read_pattern; // nullptr in previews without a stock pattern source.
+ };
+ 
+ // What the machine returns each tick. An overlay entry for the machine's own
+--- a/sdk/platform/opxy-1.2.1/track_control.cpp
++++ b/sdk/platform/opxy-1.2.1/track_control.cpp
+@@ -68,6 +68,7 @@
+ // Own turns: the turn hooks (synth_controls.cpp) offer each detent of a
+ // track's encoders to sdk_control_turn before stock's editor sees it.
+ #include "track_control.hpp"
++#include "note_container.hpp"
+ #include "stock.hpp"
+ #include "synth_controls.hpp"
+ #include "benchmark.hpp"
+@@ -401,6 +402,35 @@
+     release_all = held_count != 0;
+ }
+ 
++namespace {
++bool read_control_pattern(u32 track, control::PatternEvent* events, u32 capacity, u32& count) {
++    if (track >= control::tracks || !events || capacity < notes::capacity ||
++        !word(0x840a0524) || word(kProjectLoading)) return false;
++    if (!stock<u32(u32)>(0x8d586014)(track) || stock<u32(u32)>(0x8d586800)(track) != 16)
++        return false;
++    const u32 scale = stock<u32(u32)>(0x8d586b50)(track);
++    if (scale >= 16) return false;
++    const u32 numerator = word(0x840a36e0 + scale * 8);
++    const u32 denominator = word(0x840a36e4 + scale * 8);
++    if (!numerator || numerator != denominator) return false;
++    const auto* container = stock<const notes::Container*(u32, u32)>(0x8d5875c8)(track, 0);
++    bool used[notes::capacity];
++    if (!container || !notes::valid(*container, used)) return false;
++
++    count = 0;
++    for (i32 slot = container->head; slot != -1; slot = container->slots[slot].next) {
++        const auto& n = container->slots[slot].note;
++        if (n.flags & notes::held_flag || !n.length || !n.velocity ||
++            n.velocity >= 128 || n.pitch >= 128 || n.position < -240 || n.position >= 7680) continue;
++        // 480 stock ticks per step at scale 1 and 24 METRIC ticks per step.
++        const u32 position = static_cast<u32>(n.position < 0 ? n.position + 7680 : n.position);
++        const u32 length = n.length / 20 + (n.length % 20 >= 10);
++        events[count++] = {(position + 10) / 20 % 384, length ? length : 1, n.pitch, n.velocity};
++    }
++    return true;
++}
++}
++
+ extern "C" void sdk_gui_tick() {
+     stock<void()>(0x8d580074)();
+     ++gui_ticks;
+@@ -483,6 +513,7 @@
+             for (u32 i = 0; i < applied_count; ++i)
+                 input.values[applied[i].track][applied[i].index] = applied[i].underlying;
+             input.transport = opxy::Transport{project_bpm_x10(), word(kTicks96), playing};
++            input.read_pattern = read_control_pattern;
+             loaded = true;
+         }
+         // The host's own controls as its page shows them, LFO included.
