@@ -55,6 +55,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python sdk.py verify --package $output --stock-os $stock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $verification = Get-Content (Join-Path $output 'verification.json') -Raw | ConvertFrom-Json
+          if ($verification.linked -notcontains 'metric') {
+            throw 'The SDK linked its core fallback without METRIC.'
+          }
           Get-FileHash (Join-Path $output 'candidate/os.ldr') -Algorithm SHA256
       - name: Archive layout and verification reports
         uses: actions/upload-artifact@v4
@@ -65,3 +69,11 @@ jobs:
             ${{ runner.temp }}/metric-native-baseline/layout.json
             ${{ runner.temp }}/metric-native-baseline/manifest.json
             ${{ runner.temp }}/metric-native-baseline/verification.json
+            ${{ runner.temp }}/metric-native-baseline/analysis/compile-report.json
+      - name: Archive experimental candidate in the private repository
+        if: ${{ github.event.repository.private }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: metric-v0.8-experimental-candidate
+          if-no-files-found: error
+          path: ${{ runner.temp }}/metric-native-baseline/candidate/
