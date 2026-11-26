@@ -63,7 +63,6 @@ int main() {
     };
     assert(switch_track(0) == ott::InputResult::settings_changed);
     assert(ui.click(0, false) == ott::InputResult::page_changed);
-    assert(ui.click(0, false) == ott::InputResult::page_changed);
     assert(ui.turn(0, false, -24, 0) == ott::InputResult::settings_changed);
     assert(ui.turn(3, false, -10, 0) == ott::InputResult::settings_changed);
     assert(ui.turn(1, false, 5, 0) == ott::InputResult::settings_changed);
@@ -85,18 +84,13 @@ int main() {
     assert(ott::encode_project(ui.project(), bytes) == sizeof bytes);
     ott::ProjectSettings restored{};
     assert(ott::decode_project(bytes, sizeof bytes, restored));
-    constexpr u32 old_stride = 1 + 4 * ott::legacy_parameter_count;
-    ott::Byte legacy[1 + ott::TrackInserts::track_count * old_stride] = {1};
-    for (u32 track = 0; track < ott::TrackInserts::track_count; ++track)
-        std::memcpy(legacy + 1 + track * old_stride,
-                    bytes + 1 + track * (1 + 4 * ott::parameter_count), old_stride);
-    ott::ProjectSettings migrated{};
-    assert(ott::decode_project(legacy, sizeof legacy, migrated));
-    assert(migrated.track[0].enabled &&
-           migrated.track[0].controls.post_cutoff == restored.track[0].controls.post_cutoff &&
-           migrated.track[0].controls.depth == ott::Controls{}.depth &&
-           migrated.track[0].controls.low_trim == ott::Controls{}.low_trim &&
-           migrated.track[0].controls.high_trim == ott::Controls{}.high_trim);
+    ott::Byte legacy_v1[1 + ott::TrackInserts::track_count * (1 + 4 * 9)] = {1};
+    ott::Byte legacy_v2[1 + ott::TrackInserts::track_count * (1 + 4 * 12)] = {2};
+    legacy_v1[1] = legacy_v2[1] = 1;
+    ott::ProjectSettings defaults{};
+    assert(!ott::decode_project(legacy_v1, sizeof legacy_v1, defaults));
+    assert(!ott::decode_project(legacy_v2, sizeof legacy_v2, defaults));
+    assert(!defaults.track[0].enabled && defaults.track[0].controls.depth == ott::q31::maximum);
     auto corrupt = restored;
     corrupt.track[4].enabled = true;
     ott::encode_project(corrupt, roundtrip);

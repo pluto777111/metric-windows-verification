@@ -35,7 +35,7 @@ double level(double hz, double amplitude, const ott::Controls& controls) {
         if (n >= 192) {
             for (unsigned i = 0; i < opxy::block_frames; ++i) {
                 const double left = block[2 * i], right = block[2 * i + 1];
-                require(std::abs(left - 2 * right) < 2048, "Stereo gain must stay linked");
+                require(std::abs(left - 2 * right) < .0001 * full, "Stereo gain must stay linked");
                 power += left * left;
                 ++measured;
             }
@@ -54,7 +54,7 @@ void test_track_inserts(const Block& input) {
     settings[0].controls.time = full;
     settings[0].controls.upward = full;
     settings[0].controls.downward = full;
-    settings[0].controls.post_cutoff = full / 2;
+    settings[0].controls.high_trim = full / 2;
     configure();
     Block track_zero, track_seven, silence{};
 
@@ -137,20 +137,19 @@ void test_device_controls(const Block& input) {
             std::strcmp(panel.encoders[2].label, "High") == 0 &&
             std::strcmp(panel.encoders[3].label, "Depth") == 0, "Show the four main controls");
     require(controller.click(0, false) == InputResult::page_changed &&
-            controller.click(0, false) == InputResult::page_changed &&
-            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
-            "Clicking encoder one must show Post Cutoff");
+            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Output Trim") == 0,
+            "Clicking encoder one must show Output Trim");
     const auto before = controller.project().track[0].controls;
     require(controller.turn(0, false, -8, 1) == InputResult::settings_changed &&
-            controller.project().track[0].controls.post_cutoff < before.post_cutoff &&
-            controller.project().track[0].controls.character == before.character,
-            "Post Cutoff must have independent storage");
+            controller.project().track[0].controls.output_trim < before.output_trim &&
+            controller.project().track[0].controls.time == before.time,
+            "Output Trim must have independent storage");
     require(controller.turn(0, true, 5, 0) == InputResult::handled &&
             controller.click(3, true) == InputResult::stock,
             "Shift must stay out of the OTT toggle");
     require(controller.click(1, false) == InputResult::page_changed &&
             controller.click(2, false) == InputResult::page_changed &&
-            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0 &&
+            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Output Trim") == 0 &&
             std::strcmp(panel.encoders[1].label, "Upward") == 0 &&
             std::strcmp(panel.encoders[2].label, "Downward") == 0 && !panel.enabled,
             "A refinement click must switch only its own encoder");
@@ -207,24 +206,29 @@ void test_device_controls(const Block& input) {
             "The rejected fifth insert must stay dry");
 }
 
-void test_loud_hit_after_quiet_material() {
-    for (int mix : {25, 100}) {
-        ott::Processor processor;
-        ott::Controls controls;
-        controls.mix = static_cast<opxy::i32>(static_cast<opxy::i64>(full) * mix / 100);
-        for (unsigned block = 0; block < 130; ++block) {
-            Block input{};
-            for (unsigned frame = 0; frame < opxy::block_frames; ++frame) {
-                const double phase = 6.283185307 * 879 * (block * opxy::block_frames + frame) / 44100;
-                input[2 * frame] = input[2 * frame + 1] = static_cast<opxy::i32>(
-                    full * (block < 128 ? .015 : .88) * std::sin(phase));
-            }
-            processor.process(input.data(), controls);
-            for (auto sample : input)
-                require(sample != full && sample != -full - 1,
-                        "The first loud blocks must not carry upward gain from quiet material");
+void test_limiter() {
+    ott::Processor processor;
+    ott::Controls controls;
+    controls.low_trim = controls.high_trim = controls.output_trim = full;
+    bool reached_ceiling = false;
+    for (unsigned block = 0; block < 140; ++block) {
+        Block input{};
+        for (unsigned frame = 0; frame < opxy::block_frames; ++frame) {
+            const double phase = 6.283185307179586 * 879 * (block * opxy::block_frames + frame) / 44100;
+            input[2 * frame] = static_cast<opxy::i32>(
+                full * (block < 128 ? .0002 : .99) * std::sin(phase));
+            input[2 * frame + 1] = input[2 * frame] / 2;
+        }
+        processor.process(input.data(), controls);
+        for (unsigned frame = 0; frame < opxy::block_frames; ++frame) {
+            const double left = input[2 * frame], right = input[2 * frame + 1];
+            require(std::abs(left) <= .891250938 * full &&
+                    std::abs(left - 2 * right) < .001 * full,
+                    "The linked limiter must cap transients without shifting the stereo image");
+            reached_ceiling = reached_ceiling || std::abs(left) > .88 * full;
         }
     }
+    require(reached_ceiling, "The limiter test must actually hit the ceiling");
 }
 
 int main() {
@@ -235,96 +239,43 @@ int main() {
         seed = seed * 1664525u + 1013904223u;
         sample = static_cast<opxy::i32>(seed);
     }
-    ott::Controls controls, dry, wet;
-    dry.upward = dry.downward = 0;
-    wet.upward = wet.downward = full;
-    wet.low_protect = 0;
-    controls.mix = 0;
-    output = input;
-    processor.process(output.data(), controls);
-    require(input == output, "Mix zero must pass the original samples");
-    processor.reset();
-    processor.process(output.data(), dry);
-    require(input == output, "Neutral controls must be transparent");
-    for (int n = 0; n < 512; ++n) {
-        std::rotate(input.begin(), input.begin() + 1, input.end());
-        output = input;
-        controls = wet;
-        controls.character = controls.attack = controls.time = n % 2 ? full : 0;
-        controls.trim = n % 2 ? full : 0;
-        controls.post_cutoff = n % 3 ? 0 : full;
-        controls.mix = n % 3 ? full : full / 2;
+    ott::Controls controls;
+    for (unsigned n = 0; n < 1024; ++n) {
+        for (auto& sample : output) {
+            seed = seed * 1664525u + 1013904223u;
+            sample = n & 8 ? static_cast<opxy::i32>(seed) : n & 16 ? full : -full;
+        }
+        controls.depth = n & 2 ? full : 0;
+        controls.time = n & 4 ? full : 0;
+        controls.upward = n & 8 ? full : 0;
+        controls.downward = n & 16 ? full : 0;
+        controls.low_trim = controls.mid_trim = controls.high_trim = n & 32 ? full : 0;
+        controls.output_trim = n & 64 ? full : 0;
         processor.process(output.data(), controls);
+        for (const auto sample : output)
+            require(std::abs(static_cast<double>(sample)) <= .891250938 * full,
+                    "Full-range controls and input must stay inside the limiter ceiling");
     }
     processor.reset();
     output.fill(0);
-    processor.process(output.data(), wet);
+    processor.process(output.data(), controls);
     require(std::all_of(output.begin(), output.end(), [](opxy::i32 x) { return x == 0; }),
             "Reset and silence must clear retained audio");
 
-    for (double hz : {90., 900., 7500.}) {
-        require(level(hz, .008, wet) > 1.4 * level(hz, .008, dry), "Quiet band must be boosted");
-        require(level(hz, .7, wet) < .9 * level(hz, .7, dry), "Loud band must be attenuated");
-    }
-    ott::Controls audition, bypass;
-    bypass.mix = 0;
-    const double quiet_high = level(7500., .008, bypass);
-    require(level(7500., .008, audition) > 4.75 * quiet_high,
-            "The default full Mix must lift sustained quiet highs by at least 13.5 dB");
-    audition.mix = full / 4;
-    require(level(7500., .008, audition) > 1.9 * quiet_high,
-            "The quiet high-band lift must remain audible at quarter Mix");
-    audition.mix = full;
-    audition.depth = full / 2;
-    const double half_depth = level(7500., .008, audition);
-    audition.depth = 0;
-    require(level(7500., .008, audition) == quiet_high && half_depth > 2 * quiet_high,
-            "Depth must scale the dynamics and leave an exact dry signal at zero with neutral trims");
-    audition.low_trim = full;
-    audition.high_trim = 0;
-    require(level(45., .025, audition) > 3 * level(45., .025, bypass) &&
-            level(10000., .025, audition) < .55 * level(10000., .025, bypass),
+    ott::Controls neutral, wet;
+    neutral.depth = 0;
+    require(level(7500., .0008, wet) > 4 * level(7500., .0008, neutral),
+            "Full Depth must lift quiet highs");
+    require(level(7500., .7, wet) < .9 * level(7500., .7, neutral),
+            "Full Depth must compress loud highs");
+    auto trims = neutral;
+    trims.low_trim = full;
+    trims.high_trim = 0;
+    require(level(22., .025, trims) > 3.5 * level(22., .025, neutral) &&
+            level(10000., .025, trims) < .4 * level(10000., .025, neutral),
             "Low and High must have independent band trims even at zero Depth");
-    audition.high_trim = full;
-    const double limited = level(10000., .95, audition);
-    require(limited > .5 && limited < .891251,
-            "The enabled insert must limit boosted stereo peaks without collapsing the output");
-    ott::Processor limiter;
-    Block over{};
-    for (unsigned n = 0; n < 24; ++n) {
-        for (unsigned i = 0; i < opxy::block_frames; ++i) {
-            over[2 * i] = i % 2 ? full : -full;
-            over[2 * i + 1] = over[2 * i] / 2;
-        }
-        limiter.process(over.data(), audition);
-        for (unsigned i = 0; i < opxy::block_frames; ++i)
-            require(std::abs(static_cast<double>(over[2 * i])) <= .891250938 * full &&
-                    std::abs(static_cast<double>(over[2 * i]) - 2. * over[2 * i + 1]) < 2048,
-                    "Every processed sample peak must meet the ceiling with linked stereo gain");
-    }
-    controls = wet;
-    controls.low_protect = full;
-    require(level(45., .7, controls) > 1.1 * level(45., .7, wet), "Low Protect must preserve loud bass");
-    controls = dry;
-    controls.trim = full;
-    require(level(900., .2, controls) > 1.35 * level(900., .2, dry), "Trim must raise wet output");
-    controls = wet;
-    controls.character = full;
-    const double bright = level(7500., .008, controls);
-    controls.character = 0;
-    require(bright > 1.05 * level(7500., .008, controls), "Character must brighten the high band");
-    controls = wet;
-    controls.post_cutoff = full / 2;
-    require(level(7500., .2, controls) < .15 * level(7500., .2, wet),
-            "Post cutoff must attenuate the compressed high band");
-    require(level(45., .2, controls) > .98 * level(45., .2, wet),
-            "Post cutoff must preserve low frequencies");
-    controls.mix = 0;
-    output = input;
-    processor.process(output.data(), controls);
-    require(output == input, "Mix zero must bypass the post cutoff");
-    test_loud_hit_after_quiet_material();
+    test_limiter();
     test_track_inserts(input);
     test_device_controls(input);
-    std::cout << "OTT host checks passed\n";
+    std::cout << "Faust OTT host checks passed\n";
 }

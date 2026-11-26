@@ -168,10 +168,10 @@ index 0000000..55d1953
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..3e76635
+index 0000000..16e8fa2
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,137 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
@@ -226,7 +226,7 @@ index 0000000..3e76635
 +        if (!open_ || encoder >= 4 || shifted) return InputResult::stock;
 +        if (encoder == 3) return set_enabled(!project_.track[track_].enabled);
 +        auto& position = shown_[track_][encoder];
-+        const u32 count = encoder == 1 ? 3 : 4;
++        const u32 count = encoder == 2 ? 3 : 2;
 +        const u32 next = static_cast<u32>(position) + 1;
 +        position = next == count ? 0 : static_cast<opxy::u8>(next);
 +        return InputResult::page_changed;
@@ -278,13 +278,10 @@ index 0000000..3e76635
 +    };
 +
 +    Binding binding(u32 encoder) const {
-+        static constexpr Binding controls[3][4] = {
-+            {{"Time", &Controls::time}, {"Attack", &Controls::attack},
-+             {"Post Cutoff", &Controls::post_cutoff}, {"Character", &Controls::character}},
-+            {{"Low", &Controls::low_trim}, {"Upward", &Controls::upward},
-+             {"Low Protect", &Controls::low_protect}},
-+            {{"High", &Controls::high_trim}, {"Downward", &Controls::downward},
-+             {"Mix", &Controls::mix}, {"Output Trim", &Controls::trim}},
++        static constexpr Binding controls[3][3] = {
++            {{"Time", &Controls::time}, {"Output Trim", &Controls::output_trim}},
++            {{"Low", &Controls::low_trim}, {"Upward", &Controls::upward}},
++            {{"High", &Controls::high_trim}, {"Downward", &Controls::downward}, {"Mid Trim", &Controls::mid_trim}},
 +        };
 +        if (encoder == 3) return {"Depth", &Controls::depth};
 +        return controls[encoder][shown_[track_][encoder]];
@@ -312,35 +309,101 @@ index 0000000..3e76635
 +};
 +
 +}
+diff --git a/sdk/platform/opxy-1.2.1/ott_filter/faust_ott_tables.hpp b/sdk/platform/opxy-1.2.1/ott_filter/faust_ott_tables.hpp
+new file mode 100644
+index 0000000..d765147
+--- /dev/null
++++ b/sdk/platform/opxy-1.2.1/ott_filter/faust_ott_tables.hpp
+@@ -0,0 +1,68 @@
++#pragma once
++
++// Q16 lookup tables and 44.1 kHz Q22 envelope coefficients for Faust OTT.
++
++namespace ott { namespace faust_tables {
++using opxy::i32;
++
++constexpr i32 log2_q16[] = {
++    0, 2909, 5732, 8473, 11136, 13727, 16248, 18704,
++    21098, 23433, 25711, 27936, 30109, 32234, 34312, 36346,
++    38336, 40286, 42196, 44068, 45904, 47705, 49472, 51207,
++    52911, 54584, 56229, 57845, 59434, 60997, 62534, 64047,
++    65536
++};
++
++constexpr i32 exp2_q20[] = {
++    1048576, 1071537, 1095000, 1118978, 1143480, 1168519, 1194106, 1220254,
++    1246974, 1274279, 1302182, 1330696, 1359835, 1389611, 1420040, 1451135,
++    1482910, 1515382, 1548564, 1582474, 1617125, 1652536, 1688722, 1725700,
++    1763488, 1802103, 1841564, 1881889, 1923097, 1965207, 2008240, 2052214,
++    2097152
++};
++
++constexpr i32 softplus_q16[] = {
++    45426, 37745, 31069, 25354, 20530, 16510, 13200, 10500,
++    8318, 6567, 5170, 4061, 3184, 2493, 1950, 1523,
++    1189, 928, 724, 565, 440, 343, 267, 208,
++    162, 126, 98, 77, 60, 47, 36, 28,
++    22
++};
++
++constexpr i32 release_low_q22[] = {
++    9465, 9191, 8933, 8690, 8459, 8240, 8032, 7834,
++    7646, 7467, 7296, 7133, 6976, 6827, 6683, 6546,
++    6414, 6007, 5649, 5331, 5047, 4792, 4561, 4352,
++    4161, 3986, 3825, 3676, 3539, 3412, 3293, 3183,
++    3079, 2403, 1971, 1670, 1449, 1280, 1146, 1037,
++    948, 872, 808, 752, 704, 661, 624, 590,
++    560, 533, 508, 486, 465, 446, 429, 412,
++    397, 384, 371, 358, 347, 336, 326, 317,
++    308
++};
++
++constexpr i32 release_mid_q22[] = {
++    8046, 7814, 7595, 7387, 7191, 7005, 6828, 6660,
++    6500, 6348, 6202, 6063, 5931, 5803, 5682, 5565,
++    5453, 5202, 4973, 4764, 4572, 4394, 4230, 4078,
++    3936, 3803, 3680, 3564, 3455, 3353, 3256, 3165,
++    3079, 2403, 1971, 1670, 1449, 1280, 1146, 1037,
++    948, 872, 808, 752, 704, 661, 624, 590,
++    560, 533, 508, 486, 465, 446, 429, 412,
++    397, 384, 371, 358, 347, 336, 326, 317,
++    308
++};
++
++constexpr i32 release_high_q22[] = {
++    13514, 13514, 13514, 13514, 13514, 13514, 13514, 13514,
++    13514, 13514, 13514, 13514, 13514, 13514, 13514, 13514,
++    13514, 13124, 12756, 12408, 12079, 11766, 11470, 11188,
++    10919, 10663, 10419, 10186, 9962, 9749, 9544, 9348,
++    9160, 7151, 5865, 4971, 4313, 3809, 3411, 3088,
++    2821, 2596, 2405, 2239, 2095, 1969, 1857, 1757,
++    1667, 1586, 1512, 1445, 1384, 1328, 1276, 1228,
++    1183, 1142, 1103, 1067, 1033, 1001, 972, 943,
++    917
++};
++
++}}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
 new file mode 100644
-index 0000000..e453700
+index 0000000..67545cc
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,131 @@
 +#pragma once
 +#include "device_controls.hpp"
 +
 +namespace ott {
-+constexpr u32 legacy_parameter_count = 9;
-+constexpr u32 parameter_count = 12;
 +constexpr i32 Controls::* parameters[] = {
-+    &Controls::character, &Controls::low_protect, &Controls::time,
-+    &Controls::mix, &Controls::upward, &Controls::downward,
-+    &Controls::attack, &Controls::trim, &Controls::post_cutoff,
-+    &Controls::depth, &Controls::low_trim, &Controls::high_trim
++    &Controls::depth, &Controls::time, &Controls::low_trim, &Controls::high_trim,
++    &Controls::upward, &Controls::downward, &Controls::mid_trim, &Controls::output_trim
 +};
++constexpr u32 parameter_count = sizeof(parameters) / sizeof(parameters[0]);
 +constexpr u32 project_bytes = 1 + TrackInserts::track_count * (1 + 4 * parameter_count);
-+constexpr u32 message_id = 128, last_parameter_id = message_id + legacy_parameter_count;
++constexpr u32 message_id = 128, last_parameter_id = message_id + parameter_count;
 +using Byte = unsigned char;
 +
-+// Keep the existing DSP message range. The receiver tracks the slot order.
-+constexpr u32 parameter_id(u32 slot) {
-+    return message_id + 1 + (slot < legacy_parameter_count ? slot : slot - legacy_parameter_count);
-+}
-+
 +inline u32 encode_project(const ProjectSettings& project, Byte* data) {
-+    data[0] = 2;
++    data[0] = 3;
 +    u32 at = 1;
 +    for (const auto& track : project.track) {
 +        data[at++] = track.enabled;
@@ -353,21 +416,20 @@ index 0000000..e453700
 +}
 +
 +inline bool decode_project(const Byte* data, u32 count, ProjectSettings& project) {
-+    if (!data || !count) return false;
-+    const u32 slots = data[0] == 1 ? legacy_parameter_count : parameter_count;
-+    if ((data[0] != 1 && data[0] != 2) ||
-+        count != 1 + TrackInserts::track_count * (1 + 4 * slots)) return false;
++    // The earlier compressor used different parameters. Opening those
++    // projects starts OTT bypassed at the Faust defaults.
++    if (!data || count != project_bytes || data[0] != 3) return false;
 +    ProjectSettings next{};
 +    u32 at = 1, enabled = 0;
 +    for (auto& track : next.track) {
 +        if (data[at] > 1) return false;
 +        track.enabled = data[at++] != 0;
 +        enabled += track.enabled;
-+        for (u32 slot = 0; slot < slots; ++slot) {
++        for (auto parameter : parameters) {
 +            u32 value = 0;
 +            for (u32 byte = 0; byte < 4; ++byte) value |= static_cast<u32>(data[at++]) << (8 * byte);
 +            if (value > static_cast<u32>(q31::maximum)) return false;
-+            track.controls.*parameters[slot] = static_cast<i32>(value);
++            track.controls.*parameter = static_cast<i32>(value);
 +        }
 +    }
 +    if (enabled > TrackInserts::insert_limit) return false;
@@ -386,7 +448,7 @@ index 0000000..e453700
 +    send(message_id, static_cast<i32>(sequence << 16 | enable << 8 | selection << 1 | (reset ? 1u : 0u)));
 +    for (u32 index = first; index < end; ++index)
 +        for (u32 slot = 0; slot < parameter_count; ++slot)
-+            send(parameter_id(slot), project.track[index].controls.*parameters[slot]);
++            send(message_id + 1 + slot, project.track[index].controls.*parameters[slot]);
 +    send(message_id, static_cast<i32>(0x80000000u | sequence));
 +}
 +
@@ -409,7 +471,7 @@ index 0000000..e453700
 +            }
 +            reading_ = false;
 +        } else if (reading_) {
-+            if (index_ == end_ || id != parameter_id(slot_) || value < 0) {
++            if (index_ == end_ || id != message_id + 1 + slot_ || value < 0) {
 +                reading_ = false;
 +            } else {
 +                staged_.track[index_].controls.*parameters[slot_] = value;
@@ -460,212 +522,253 @@ index 0000000..e453700
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..3477f17
+index 0000000..6bc55fe
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,290 @@
+@@ -0,0 +1,265 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
 +#include <opxy/q31.hpp>
++#include "faust_ott_tables.hpp"
 +
++// Fixed-point port of David Braun's MIT-licensed co.xfer_ott model in the
++// Faust Libraries revision ecf019c75d9860903d854c8c72a0907c8ac3b4e4.
++// The Butterworth SVF cascade follows the equivalent transfer functions in
++// Faust's crossover3LR4. The host reference runs the upstream Faust function.
 +namespace ott {
 +using opxy::i32;
++using opxy::i64;
 +using opxy::u32;
 +namespace q31 = opxy::q31;
 +
-+// Normalized Q31 controls. Keep existing fields stable for project recall.
 +struct Controls {
-+    i32 character = q31::maximum / 2;
-+    i32 low_protect = q31::maximum / 4;
-+    i32 time = q31::maximum / 2;
-+    i32 mix = q31::maximum;
-+    i32 upward = 1546188226; // 72%
-+    i32 downward = 1546188226; // 72%
-+    i32 attack = q31::maximum / 2;
-+    i32 trim = q31::maximum / 2;
-+    i32 post_cutoff = q31::maximum;
 +    i32 depth = q31::maximum;
++    i32 time = q31::maximum / 2;
 +    i32 low_trim = q31::maximum / 2;
 +    i32 high_trim = q31::maximum / 2;
++    i32 upward = q31::maximum / 2;
++    i32 downward = q31::maximum / 2;
++    i32 mid_trim = q31::maximum / 2;
++    i32 output_trim = q31::maximum / 2;
 +};
 +
-+// One instance per stereo track, zero-initialized or reset on activation.
 +class Processor {
++    static constexpr i32 db_unit = 1 << 16;
++    static constexpr i32 gain_period = 4;
++
++    struct Coefficients {
++        i32 g_q31, damp_q30, normalizer_q31;
++    };
++
++    // The Q28 integrators keep quiet crossover leakage below the upward
++    // compression floor. One SVF provides both sides of the first stage.
++    struct Filter {
++        i32 integrator1 = 0, integrator2 = 0;
++        i32 tick(i32 x, const Coefficients& c, i32& low, i32& high) {
++            const i32 reduced = x - integrator2 - 2 * rounded(c.damp_q30, integrator1);
++            const i32 hp = rounded(c.normalizer_q31, reduced);
++            const i32 feed1 = rounded(c.g_q31, hp);
++            const i32 band = integrator1 + feed1;
++            const i32 feed2 = rounded(c.g_q31, band);
++            low = integrator2 + feed2;
++            high = hp;
++            integrator1 = band + feed1;
++            integrator2 = low + feed2;
++            return band;
++        }
++    };
++
++    struct Split {
++        Filter lower[3], upper[3], phase;
++        void tick(i32 input, i32 (&bands)[3]) {
++            constexpr Coefficients lower_coeff{13508514, 1525254507, 2128464695};
++            constexpr Coefficients upper_coeff{386551232, 1711775866, 1668645873};
++            constexpr i32 sqrt_two_q30 = 1518500250;
++            i32 low, rest, middle, high, unused_a, unused_b;
++            lower[0].tick(input, lower_coeff, low, rest);
++            lower[1].tick(low, lower_coeff, low, unused_a);
++            lower[2].tick(rest, lower_coeff, unused_a, rest);
++            // Match the phase shift caused by the second crossover.
++            const i32 phase_band = phase.tick(low, upper_coeff, unused_a, unused_b);
++            bands[0] = low - 4 * rounded(sqrt_two_q30, phase_band);
++            upper[0].tick(rest, upper_coeff, middle, high);
++            upper[1].tick(middle, upper_coeff, bands[1], unused_a);
++            upper[2].tick(high, upper_coeff, unused_a, bands[2]);
++        }
++    };
++
++    struct Curve {
++        i32 up_threshold, down_threshold, up_width, down_width;
++        i32 inv_up_width, inv_down_width, up_slope, makeup, cap, floor;
++        i32 makeup_a, makeup_b, makeup_c, down_a, down_b, down_c;
++        i32 attack;
++        const i32* release;
++    };
++
++    struct Band {
++        i64 envelope = 0; // stereo mean power, Q44
++        i32 gain = 0, step = 0;
++    };
++
 +public:
 +    void reset() { *this = Processor{}; }
++    bool settled() const { return silent_blocks_ >= tail_blocks; }
 +
-+    bool settled() const {
-+        for (u32 ch = 0; ch < 2; ++ch) {
-+            if (low_[ch] || mid_[ch] || post_first_[ch] || post_second_[ch]) return false;
-+        }
-+        for (i32 level : envelope_) {
-+            if (level) return false;
-+        }
-+        return true;
-+    }
-+
-+    // Normalized Q31 controls. sum holds 64 interleaved stereo frames at 44.1 kHz.
 +    void process(i32* sum, const Controls& controls) {
-+        const i32 mix = positive(controls.mix);
-+        if (!mix) return;
-+        const i32 character = positive(controls.character);
-+        const i32 time = positive(controls.time);
-+        const i32 depth = positive(controls.depth);
-+        const i32 release = 230000000 - q31::multiply(time, 210000000);
-+        const i32 base_attack = 1900000000 - q31::multiply(positive(controls.attack), 800000000);
-+        const i32 attack = q31::subtract(base_attack,
-+            q31::multiply(bipolar(time), base_attack / 4));
-+        // One-pole coefficient range of about 1.1 to 4.4 kHz at 44.1 kHz.
-+        const i32 crossover = 320000000 + q31::multiply(character, 664000000);
-+        const i32 brightness = scale(bipolar(character), depth);
-+        const i32 upward = scale(positive(controls.upward), depth);
-+        const i32 downward = scale(positive(controls.downward), depth);
-+        const i32 compensation = depth_trim(scale(1546188226, depth));
-+        const i32 band_trim[] = {band_trim_gain(positive(controls.low_trim)), unity,
-+                                 band_trim_gain(positive(controls.high_trim))};
-+        const i32 trim = bipolar(positive(controls.trim));
-+        const i32 output_delta = q31::multiply(trim, trim < 0 ? 627000000 : 886000000);
-+        const i32 cutoff = positive(controls.post_cutoff);
-+        const bool post_filter = cutoff < q31::maximum;
-+        const i32 post_coefficient = post_filter ? cutoff_coefficient(cutoff) : 0;
-+        if (!post_filter) {
-+            for (u32 ch = 0; ch < 2; ++ch) {
-+                post_first_[ch] = post_second_[ch] = 0;
-+            }
-+        }
-+        const bool fully_wet = mix == q31::maximum;
-+        i32 peak[3] = {};
-+        i32 split[2 * opxy::block_frames][3];
-+        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
-+            for (u32 ch = 0; ch < 2; ++ch) {
-+                const u32 index = 2 * frame + ch;
-+                // Leave headroom for the differences of the crossover states.
-+                const i32 dry = q31::shift_right(sum[index], 3);
-+                const i32 low = follow(low_[ch], dry, 69100000); // 230 Hz
-+                const i32 rest = dry - low;
-+                const i32 mid = follow(mid_[ch], rest, crossover);
-+                split[index][0] = low;
-+                split[index][1] = mid;
-+                split[index][2] = rest - mid;
-+                for (u32 band = 0; band < 3; ++band) {
-+                    const i32 value = split[index][band];
-+                    const i32 magnitude = value < 0 ? ~value : value;
-+                    if (magnitude > peak[band]) peak[band] = magnitude;
-+                }
-+            }
-+        }
-+        i32 gain[3], step[3], target[3];
-+        for (u32 band = 0; band < 3; ++band) {
-+            // Use this block's detector so the previous quiet block's upward
-+            // gain cannot be carried into a loud hit.
-+            const i32 band_release = band == 2 ? release * 2 + release / 2
-+                                               : release + (release / 2) * static_cast<i32>(band);
-+            follow(envelope_[band], peak[band],
-+                   peak[band] > envelope_[band] ? attack : band_release);
-+            gain[band] = gain_unity + gain_delta_[band];
-+            // The high band normally carries less energy. Offset its knee
-+            // so quiet cymbal, noise and harmonics stay in the lift region.
-+            const i32 detector = band == 2 ? q31::half(envelope_[band]) : envelope_[band];
-+            i32 delta = curve(detector) - unity;
-+            // Give quiet highs extra upward gain. Leave the high-band
-+            // downward curve in place so loud hats still compress.
-+            if (band == 2 && delta > 0)
-+                delta += q31::multiply(delta, 1342177280); // +62.5% of the boost
-+            const i32 strength = delta > 0 ? upward : downward;
-+            const i32 protected_strength = band == 0
-+                ? q31::multiply(strength, q31::maximum - positive(controls.low_protect))
-+                : strength;
-+            i32 band_gain = unity + q31::multiply(protected_strength, delta);
-+            if (upward || downward) band_gain = q31::multiply(compensation, band_gain);
-+            if (band == 2) band_gain = q31::add(band_gain, q31::multiply(band_gain, q31::multiply(brightness, 240000000)));
-+            band_gain = q31::add(band_gain, q31::multiply(band_gain, output_delta));
-+            // Q26 keeps headroom for the dynamics and the +12 dB band trim.
-+            const i32 trim_ceiling = q31::shift_right(band_trim[band], 2);
-+            const i32 trimmed_gain = band_trim[band] == unity
-+                ? q31::shift_right(band_gain, 2)
-+                : q31::multiply(band_gain, band_trim[band]) * 2;
-+            target[band] = trimmed_gain - gain_unity;
-+            if (peak[band] > envelope_[band]) {
-+                const i32 current_peak = band == 2 ? q31::half(peak[band]) : peak[band];
-+                const i32 peak_delta = curve(current_peak) - unity;
-+                if (peak_delta <= 0) {
-+                    // Remove upward gain immediately on a transient entering
-+                    // compression. The Attack knob still sets detector speed.
-+                    if (target[band] > trim_ceiling - gain_unity)
-+                        target[band] = trim_ceiling - gain_unity;
-+                    if (gain[band] > trim_ceiling) gain[band] = trim_ceiling;
-+                }
-+            }
-+            step[band] = (target[band] - (gain[band] - gain_unity)) / static_cast<i32>(opxy::block_frames);
-+        }
-+
-+        // Seed the two poles from the current wet signal when engaging them.
-+        const bool start_post = post_filter && !post_active_;
-+        post_active_ = post_filter;
-+        bool processing = post_filter;
-+        for (u32 band = 0; band < 3; ++band)
-+            processing = processing || gain[band] != gain_unity || target[band];
-+        if (!processing) {
-+            for (auto& delta : gain_delta_) delta = 0;
++        bool silent = true;
++        for (u32 i = 0; i < 2 * opxy::block_frames; ++i) silent = silent && sum[i] == 0;
++        if (!silent) silent_blocks_ = 0;
++        else if (++silent_blocks_ >= tail_blocks) {
++            for (u32 i = 0; i < 2 * opxy::block_frames; ++i) sum[i] = 0;
 +            return;
 +        }
-+        u32 output_peak = 0;
-+        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
-+            for (u32 band = 0; band < 3; ++band) gain[band] += step[band];
-+            for (u32 ch = 0; ch < 2; ++ch) {
-+                const u32 index = 2 * frame + ch;
-+                opxy::i64 combined = 0;
-+                for (u32 band = 0; band < 3; ++band)
-+                    combined += q31::wide(split[index][band], gain[band]);
-+                i32 wet = q31::saturate(combined >> 29); // Q25
-+                if (post_filter) {
-+                    if (start_post && frame == 0) post_first_[ch] = post_second_[ch] = wet;
-+                    const i32 first = follow_post(post_first_[ch], wet, post_coefficient);
-+                    wet = follow_post(post_second_[ch], first, post_coefficient);
-+                }
-+                if (!fully_wet) {
-+                    const i32 dry_scaled = q31::shift_right(sum[index], 6);
-+                    wet = q31::add(dry_scaled, q31::multiply(mix, q31::subtract(wet, dry_scaled)));
-+                }
-+                split[index][0] = wet;
-+                const u32 magnitude = wet < 0 ? 0u - static_cast<u32>(wet) : static_cast<u32>(wet);
-+                if (magnitude > output_peak) output_peak = magnitude;
-+            }
++        static constexpr Curve curves[] = {
++            {-3015777,-2551978,3618,32768,1187246,131072,49012,919785,2352808,-1720975,
++             120468,-79576,24645,63248,2067,221,15274,faust_tables::release_low_q22},
++            {-3053224,-2281990,29550,34736,145345,123647,49546,593234,2377974,-2077491,
++             107381,-54542,12696,63020,1445,1071,15822,faust_tables::release_mid_q22},
++            {-3108982,-2732058,2215,32768,1938935,131072,48980,921698,2350907,-1700659,
++             120875,-80428,25090,63757,3787,-2008,9836,faust_tables::release_high_q22},
++        };
++        const i32 added_db = trim_db(controls.output_trim) - q31::multiply(controls.depth, 6 * db_unit);
++        const i32 trims[] = {trim_db(controls.low_trim) + added_db, trim_db(controls.mid_trim) + added_db,
++                             trim_db(controls.high_trim) + added_db};
++        i32 rise[3], fall[3], fixed_db[3], release[3];
++        const i32 downward = down_strength(controls.downward);
++        for (u32 band = 0; band < 3; ++band) {
++            const auto& curve = curves[band];
++            const i32 makeup = depth_curve(controls.depth, curve.makeup_a, curve.makeup_b, curve.makeup_c);
++            const i32 down = depth_curve(controls.depth, curve.down_a, curve.down_b, curve.down_c);
++            rise[band] = q31::multiply(controls.depth, q31::multiply(controls.upward, 2 * curve.up_slope));
++            fall[band] = min(db_unit, mul_q16(down, downward));
++            fixed_db[band] = mul_q16(makeup, curve.makeup);
++            release[band] = lookup_control(curve.release, controls.time, 6);
 +        }
 +
-+        const i32 limit = peak_limit(output_peak);
-+        if (limiter_gain_ < limit)
-+            limiter_gain_ += (limit - limiter_gain_) / 4 + 1;
-+        else limiter_gain_ = limit;
-+        for (u32 i = 0; i < 2 * opxy::block_frames; ++i)
-+            sum[i] = q31::shift_left(scale(split[i][0], limiter_gain_), 6);
++        i64 peak = 0;
++        i64 output[2 * opxy::block_frames];
++        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
++            i32 stereo[2][3];
++            for (u32 ch = 0; ch < 2; ++ch)
++                split_[ch].tick(q31::shift_right(sum[2 * frame + ch], 3), stereo[ch]);
 +
-+        for (u32 band = 0; band < 3; ++band) gain_delta_[band] = target[band];
++            i64 wet[2] = {};
++            for (u32 band = 0; band < 3; ++band) {
++                auto& state = bands_[band];
++                const auto& curve = curves[band];
++                const i64 power = (square(stereo[0][band]) + square(stereo[1][band])) >> 13;
++                const i64 delta = power - state.envelope;
++                state.envelope += (delta * (delta > 0 ? curve.attack : release[band])) >> 22;
++                if (!(frame & (gain_period - 1))) {
++                    const i32 db = level_db(state.envelope);
++                    const i32 up = mul_q16(rise[band],
++                        soft_hinge(curve.up_threshold - db, curve.up_width, curve.inv_up_width));
++                    const i32 down = mul_q16(fall[band],
++                        soft_hinge(db - curve.down_threshold, curve.down_width, curve.inv_down_width));
++                    const i32 gain_db = max(curve.floor, fixed_db[band] + min(curve.cap, up) - down) +
++                        trims[band];
++                    const i32 next = gain_linear(gain_db);
++                    if (!initialized_ && frame == 0) state.gain = next;
++                    state.step = (next - state.gain) / gain_period;
++                }
++                state.gain += state.step;
++                for (u32 ch = 0; ch < 2; ++ch)
++                    wet[ch] += q31::wide(stereo[ch][band], state.gain) >> 22;
++            }
++            for (u32 ch = 0; ch < 2; ++ch) {
++                const i64 sample = wet[ch];
++                output[2 * frame + ch] = sample;
++                const i64 magnitude = sample < 0 ? -sample : sample;
++                if (magnitude > peak) peak = magnitude;
++            }
++        }
++        initialized_ = true;
++        const i32 limit = peak_limit(peak);
++        if (limiter_ < limit) limiter_ += (limit - limiter_) / 4 + 1;
++        else limiter_ = limit;
++        for (u32 i = 0; i < 2 * opxy::block_frames; ++i) {
++            sum[i] = q31::shift_left(apply_limit(output[i], limiter_), 6);
++        }
 +    }
 +
 +private:
-+    static constexpr i32 unity = 1 << 28; // Q28
-+    static constexpr i32 gain_unity = 1 << 26;
-+    i32 low_[2] = {};
-+    i32 mid_[2] = {};
-+    i32 post_first_[2] = {};
-+    i32 post_second_[2] = {};
-+    bool post_active_ = false;
-+    i32 envelope_[3] = {};
-+    i32 gain_delta_[3] = {};
-+    i32 limiter_gain_ = q31::maximum;
++    static constexpr u32 tail_blocks = 128;
++    Split split_[2];
++    Band bands_[3];
++    u32 silent_blocks_ = 0;
++    bool initialized_ = false;
++    i32 limiter_ = q31::maximum;
 +
-+    static i32 scale(i32 value, i32 gain) {
-+        return gain == q31::maximum ? value : q31::multiply(value, gain);
++    static i32 min(i32 a, i32 b) { return a < b ? a : b; }
++    static i32 max(i32 a, i32 b) { return a > b ? a : b; }
++    static i32 mul_q16(i32 a, i32 b) { return static_cast<i32>(q31::wide(a, b) >> 16); }
++    static i32 rounded(i32 coefficient, i32 sample) {
++        return static_cast<i32>((q31::wide(coefficient, sample) + (1 << 30)) >> 31);
 +    }
-+
-+    static i32 peak_limit(u32 peak) {
-+        constexpr u32 ceiling = 29905418; // -1 dBFS in Q25
++    static i64 square(i32 x) {
++        constexpr i32 bound = 4 << 28;
++        x = min(bound, max(-bound, x));
++        return q31::wide(x, x);
++    }
++    static i32 trim_db(i32 value) {
++        return q31::multiply(value - q31::maximum / 2, 24 * db_unit);
++    }
++    static i32 depth_curve(i32 depth, i32 a, i32 b, i32 c) {
++        return q31::multiply(depth, a + q31::multiply(depth, b + q31::multiply(depth, c)));
++    }
++    static i32 lookup_control(const i32* table, i32 value, u32 bits) {
++        const u32 index = static_cast<u32>(value) >> (31 - bits);
++        const i32 fraction = (value & (q31::maximum >> bits)) << bits;
++        return table[index] + q31::multiply(table[index + 1] - table[index], fraction);
++    }
++    static i32 down_strength(i32 value) {
++        // Upstream's fitted curve below 1, then a straight line up to 2.
++        if (value >= q31::maximum / 2) return value >> 14;
++        constexpr i32 points[] = {0, 12433, 25517, 38669, 51978, 65536, 65536};
++        const u32 step = static_cast<u32>(value >> 15) * 10;
++        const u32 index = step >> 16;
++        return points[index] + mul_q16(points[index + 1] - points[index], step & 65535u);
++    }
++    static i32 soft_hinge(i32 value, i32 width, i32 inverse) {
++        const i32 distance = value < 0 ? -value : value;
++        const i32 positive = max(0, value);
++        if (distance >= 8 * width) return positive;
++        const i32 position = 4 * mul_q16(distance, inverse);
++        const u32 index = static_cast<u32>(position) >> 16;
++        if (index >= 32) return positive;
++        const auto* table = faust_tables::softplus_q16;
++        return positive + mul_q16(width, table[index] + mul_q16(table[index + 1] - table[index], position & 65535));
++    }
++    static i32 level_db(i64 energy) {
++        if (!energy) return -200 * db_unit;
++        const u32 hi = static_cast<u32>(energy >> 32);
++        const u32 word = hi ? hi : static_cast<u32>(energy);
++        const u32 shift = static_cast<u32>(__builtin_clz(word));
++        const u32 low = static_cast<u32>(energy);
++        const u32 normalized = hi ? (hi << shift) | (low >> (32 - shift)) : low << shift;
++        const u32 index = (normalized >> 26) & 31u;
++        const i32 fraction = (normalized >> 10) & 65535u;
++        const auto* table = faust_tables::log2_q16;
++        const i32 octave = (hi ? 63 : 31) - static_cast<i32>(shift) - 44;
++        return mul_q16(197283, octave * db_unit + table[index] +
++                       mul_q16(table[index + 1] - table[index], fraction));
++    }
++    static i32 gain_linear(i32 db) {
++        const i32 octave = mul_q16(db, 10885);
++        const i32 shift = q31::shift_right(octave, 16);
++        const u32 fraction = static_cast<u32>(octave) & 65535u;
++        const u32 index = fraction >> 11;
++        const auto* table = faust_tables::exp2_q20;
++        const i32 gain = (table[index] +
++            mul_q16(table[index + 1] - table[index], (fraction & 2047u) << 5)) >> 1; // Q19
++        return shift < 0 ? q31::shift_right(gain, -shift) : q31::shift_left(gain, shift);
++    }
++    static i32 peak_limit(i64 peak) {
++        constexpr i32 ceiling = 29905418; // -1 dBFS in Q25
 +        if (peak <= ceiling) return q31::maximum;
-+        // Divide once for the whole stereo block using shifts. Round down
-+        // to guarantee the ceiling. The largest peak magnitude is 2^31.
-+        u32 remainder = ceiling, gain = 0;
++        i64 remainder = ceiling;
++        u32 gain = 0;
 +        for (u32 bit = 0; bit < 23; ++bit) {
 +            remainder <<= 1;
 +            gain <<= 1;
@@ -676,87 +779,21 @@ index 0000000..3477f17
 +        }
 +        return static_cast<i32>(gain << 8);
 +    }
-+
-+    static i32 band_trim_gain(i32 value) {
-+        constexpr i32 gains[] = {67427938, 95244494, 134536424, 190037749, unity,
-+                                 379175160, 535599149, 756553907, 1068660799};
-+        if (value == q31::maximum / 2) return unity;
-+        const u32 segment = static_cast<u32>(value) >> 28;
-+        const i32 fraction = (value & ((1 << 28) - 1)) * 8;
-+        return gains[segment] + q31::multiply(fraction, gains[segment + 1] - gains[segment]);
-+    }
-+
-+    static i32 follow_post(i32& state, i32 input, i32 coefficient) {
-+        // Snap only on silence so ordinary low-level stereo detail remains linear.
-+        if (!input && state > -32 && state < 32) state = 0;
-+        else state += q31::multiply(coefficient, q31::subtract(input, state));
-+        return state;
-+    }
-+
-+    // Two cascaded one-poles. Table entries target the combined -3 dB
-+    // frequency, with the last segment opening smoothly toward bypass.
-+    static i32 cutoff_coefficient(i32 cutoff) {
-+        const i32 coefficients[] = {
-+            83881775, 146822686, 254354639, 425361901,
-+            700499261, 1068843850, 1475027432, 1787043948, 2147483647
-+        };
-+        const u32 segment = static_cast<u32>(cutoff) >> 28;
-+        const i32 fraction = (cutoff & ((1 << 28) - 1)) * 8;
-+        return coefficients[segment]
-+            + q31::multiply(fraction, coefficients[segment + 1] - coefficients[segment]);
-+    }
-+
-+    // Wet gain compensation calibrated at quarter-strength intervals using
-+    // drum pulses, a bass phrase and a sustained chord. Folded into band gains
-+    // once per block, before the wet/dry blend.
-+    static i32 depth_trim(i32 depth) {
-+        const i32 trims[] = {2147483647, 2133928508, 2111931683, 2075773032, 2026188590};
-+        const u32 segment = static_cast<u32>(depth) >> 29;
-+        const i32 fraction = (depth & ((1 << 29) - 1)) * 4;
-+        return trims[segment] + q31::multiply(fraction, trims[segment + 1] - trims[segment]);
-+    }
-+
-+    static i32 bipolar(i32 value) {
-+        return value == q31::maximum ? q31::maximum : (value - q31::maximum / 2) * 2;
-+    }
-+
-+    static i32 positive(i32 value) { return value > 0 ? value : 0; }
-+
-+    static i32 follow(i32& state, i32 input, i32 coefficient) {
-+        const i32 difference = input - state;
-+        // Fixed-point steps can round to zero near the target. Snap here
-+        // so a silent track reaches exact zero instead of emitting residual DC.
-+        if (difference > -128 && difference < 128) state = input;
-+        else state += q31::multiply(coefficient, difference);
-+        return state;
-+    }
-+
-+    // Gain at detector levels doubling from approx. -72 to 0 dBFS.
-+    // Quiet material gets upward compression above a floor, loud material
-+    // gets downward compression. Below the floor the gain returns to unity.
-+    static i32 curve(i32 level) {
-+        const i32 gains[] = {
-+            unity, unity, 4 * unity, 5 * unity, 5 * unity, 4 * unity + unity / 2,
-+            4 * unity, 2 * unity + unity / 2, unity + unity / 4, unity / 2,
-+            unity / 3, unity / 5, unity / 6
-+        };
-+        u32 index = 0;
-+        u32 shift = 16;
-+        i32 edge = 1 << shift;
-+        if (level <= edge) return unity;
-+        while (index < 11 && level >= edge * 2) {
-+            ++index;
-+            ++shift;
-+            edge *= 2;
-+        }
-+        const i32 fraction = q31::shift_left(level - edge, 31 - shift);
-+        return gains[index] + q31::multiply(fraction, gains[index + 1] - gains[index]);
++    static i32 apply_limit(i64 sample, i32 gain) {
++        if (gain == q31::maximum) return static_cast<i32>(sample);
++        if (sample <= q31::maximum && sample >= q31::minimum)
++            return q31::multiply(static_cast<i32>(sample), gain);
++        // Keep overloads in wide precision until after the shared gain.
++        const i64 upper = q31::wide(static_cast<i32>(sample >> 16), gain);
++        const i64 lower = q31::wide(static_cast<i32>(sample & 65535), gain);
++        return static_cast<i32>((upper + (lower >> 16)) >> 15);
 +    }
 +};
++
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp b/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp
 new file mode 100644
-index 0000000..2e0c707
+index 0000000..1d5a6f9
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp
 @@ -0,0 +1,74 @@
@@ -789,7 +826,7 @@ index 0000000..2e0c707
 +        for (u32 index = 0; index < track_count; ++index) {
 +            auto& track = tracks_[index];
 +            track.settings = settings[index];
-+            if (!track.settings.enabled || track.settings.controls.mix <= 0) track.sleep();
++            if (!track.settings.enabled) track.sleep();
 +        }
 +        return true;
 +    }
@@ -807,7 +844,7 @@ index 0000000..2e0c707
 +        if (index >= track_count) return voices;
 +        auto& track = tracks_[index];
 +        const auto& settings = track.settings;
-+        if (!settings.enabled || settings.controls.mix <= 0) return voices;
++        if (!settings.enabled) return voices;
 +        if (!track.active && !voices) return 0;
 +        track.active = true;
 +        track.processor.process(sum, settings.controls);
