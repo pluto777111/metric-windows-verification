@@ -22,6 +22,7 @@ struct Performance {
     bool editing_octave, editing_anchor_scale;
     bool editing_lane_octaves;
     signed char lane_octave[4];
+    uint8_t off_mask;
 };
 
 inline unsigned shifted_octave(unsigned pitch, int octave) {
@@ -79,6 +80,7 @@ inline void render_shared_phrase(Performance& performance, const metric_core::Se
     for (unsigned i=0;i<output.count;++i) {
         auto event=output.events[i];
         const unsigned lane=event.pitch==master.pitch_a ? 0 : 1;
+        if(performance.off_mask&(1u<<lane)) continue;
         const unsigned at=indices[lane]++;
         const unsigned denominator=lengths[lane]-1;
         const unsigned index=denominator ? (at*(note_count-1)+denominator/2)/denominator : 0;
@@ -177,6 +179,7 @@ inline void render_generated_lanes(const Performance& p,const metric_core::Setti
             auto event=pulses.events[i];
             const unsigned part=event.pitch==settings.pitch_a ? 0 : 1;
             const unsigned lane=pair*2+part;
+            if(p.off_mask&(1u<<lane)) continue;
             const unsigned note=order[part]++;
             const unsigned cue=cues.at(event.tick);
             if(!(cue&pin_rhythm)) {
@@ -210,6 +213,7 @@ inline void render_programmed_phrase(const Performance& p, const metric_core::Se
                                      unsigned bar, const opxy::control::PatternEvent* notes,
                                      unsigned count, unsigned cycle, unsigned phase,
                                      metric_core::Bar& out, uint8_t* lanes,const CueWindow& cues={}) {
+    if(p.off_mask&2u) return;
     const unsigned period=p.pace ? p.pace : 1;
     const auto mode=static_cast<OutputMode>(p.output);
     const unsigned rotation=(master.rotation+(bar/period)%metric_core::bounded_phrase(master.phrase_bars))*24;

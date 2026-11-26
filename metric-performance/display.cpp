@@ -73,7 +73,8 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
       static const char* const routes[]={"track A","track B","track C","track D"};
       for(unsigned i=0;i<4;++i) {
         names[i]=routes[i];
-        number(values[i],knob[i]+1);
+        if(knob[i])number(values[i],knob[i]);
+        else copy(values[i],header_capacity,"OFF");
       }
     } else if(page==3) {
       static const char* const octave_labels[]={"oct A","oct B","oct C","oct D"};

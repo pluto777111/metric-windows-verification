@@ -23,6 +23,8 @@ struct ControlState {
   metric_visual::PhraseView view;
   u32 host_pattern, host_cycle;
   uint16_t step_cues[cue_patterns][cue_steps];
+  uint8_t route_choices[4];
+  bool editing_routes;
   Performance performance;
 };
 
@@ -49,6 +51,43 @@ inline void update(ControlState& st, const opxy::control::Input& in) {
 inline unsigned adjust(unsigned value, i32 detents, unsigned maximum) {
   const i32 next=static_cast<i32>(value)+detents;
   return next<0 ? 0u : next>static_cast<i32>(maximum) ? maximum : static_cast<unsigned>(next);
+}
+inline void edit_routes(ControlState& st,const opxy::control::Input& in) {
+  auto& p=st.performance;
+  const bool editing=p.page==3 && in.shift && (!in.page_key || in.page_key==3);
+  const unsigned targets[]={st.values[6],st.values[7],p.target_c,p.target_d};
+  if(editing && !st.editing_routes) {
+    for(unsigned lane=0;lane<4;++lane)
+      st.route_choices[lane]=(p.off_mask&(1u<<lane)) ? 0 : targets[lane]+1;
+  } else if(!editing && st.editing_routes) {
+    // Commit on Shift release so finding Off never reassigns the source
+    // to an intermediate track crossed while turning the encoder.
+    for(unsigned lane=0;lane<4;++lane) {
+      const unsigned choice=st.route_choices[lane];
+      const unsigned bit=1u<<lane;
+      if(!choice) {
+        if(!(p.off_mask&bit))st.generated=0;
+        p.off_mask|=bit;
+        continue;
+      }
+      const unsigned target=choice-1;
+      if(target!=targets[lane]) {
+        if(lane<2) {
+          const unsigned slot=6+lane;
+          const auto value=static_cast<i32>((target*2+1)<<27);
+          if(!in.set_own_parameter || !in.set_own_parameter(in.track,slot,value))continue;
+          st.values[slot]=target;
+          if(lane==0)st.settings.target_a=target;
+          else st.settings.target_b=target;
+        } else if(lane==2) p.target_c=target;
+        else p.target_d=target;
+        st.generated=0;
+      }
+      if(p.off_mask&bit)st.generated=0;
+      p.off_mask&=~bit;
+    }
+  }
+  st.editing_routes=editing;
 }
 inline bool valid_host_pattern(const opxy::control::HostPattern& host) {
   return host.cycle && host.steps && host.steps<=cue_steps && !(host.cycle%host.steps) &&
@@ -103,19 +142,7 @@ inline void edit_performance(ControlState& st, const opxy::control::Input& in) {
       if (knob==3) p.evolve=adjust(p.evolve,detents*4,100);
     } else if (p.page==3) {
       if (in.shift) {
-        if(knob>=2) {
-          auto& target=knob==2 ? p.target_c : p.target_d;
-          target=adjust(target,detents,7);
-        } else if(in.set_own_parameter) {
-          const unsigned slot=6+knob;
-          const unsigned target=adjust(st.values[slot],detents,7);
-          const auto value=static_cast<i32>((target*2+1) << 27);
-          if(target!=st.values[slot] && in.set_own_parameter(in.track,slot,value)) {
-            st.values[slot]=target;
-            if(knob==0) st.settings.target_a=target;
-            else st.settings.target_b=target;
-          }
-        }
+        if(st.editing_routes)st.route_choices[knob]=adjust(st.route_choices[knob],detents,8);
       } else if(p.editing_lane_octaves) {
         p.lane_octave[knob]=static_cast<int>(adjust(p.lane_octave[knob]+2,detents,4))-2;
       } else {
@@ -214,6 +241,8 @@ inline void control_reset(ControlState& st) {
   st.current_bar=0; st.playing=0; st.generated=0; st.event_count=0;
   st.sent_a=0; st.sent_b=0;
   st.view={};
+  st.editing_routes=false;
+  for(auto& choice : st.route_choices)choice=0;
   st.host_pattern=st.host_cycle=0;
   for(auto& pattern : st.step_cues)for(auto& cue : pattern)cue=0;
   for(u32 i=0;i<8;++i) st.values[i]=0;
@@ -231,6 +260,7 @@ inline void control_reset(ControlState& st) {
   st.performance.octave=0; st.performance.anchor_span=1;
   st.performance.editing_octave=false; st.performance.editing_anchor_scale=false;
   st.performance.editing_lane_octaves=false;
+  st.performance.off_mask=0;
   for(auto& octave : st.performance.lane_octave) octave=0;
   for(unsigned i=0;i<4;++i) st.performance.anchor_quality[i]=i==2 ? 1 : 0;
   auto& punch=st.performance.phrases.input.punch;
@@ -248,7 +278,7 @@ inline u32 control_save(const ControlState& st, opxy::u8* data,u32 capacity) {
   if(capacity<4)return 0;
   for(u32 i=0;i<4;++i)data[i]=static_cast<opxy::u8>(kVersion>>(8*i));
   if(capacity<10)return 4;
-  data[4]=st.performance.target_c;
+  data[4]=st.performance.target_c | st.performance.off_mask<<4;
   data[5]=st.performance.target_d;
   for(u32 i=0;i<4;++i)data[6+i]=st.performance.lane_octave[i]+2;
   u32 last=10;
@@ -266,7 +296,8 @@ inline void control_load(ControlState& st,const opxy::u8* data,u32 size) {
   control_reset(st);
   if(!data || size<10 || size>10+2*cue_patterns*cue_steps || size%2)return;
   for(u32 i=0;i<4;++i)if(data[i]!=static_cast<opxy::u8>(kVersion>>(8*i)))return;
-  if(data[4]<8)st.performance.target_c=data[4];
+  if(!(data[4]&8))st.performance.target_c=data[4]&7;
+  st.performance.off_mask=data[4]>>4;
   if(data[5]<8)st.performance.target_d=data[5];
   for(u32 i=0;i<4;++i)if(data[6+i]<5)st.performance.lane_octave[i]=static_cast<int>(data[6+i])-2;
   for(u32 at=10;at<size;at+=2) {
@@ -280,6 +311,7 @@ inline void control_load(ControlState& st,const opxy::u8* data,u32 size) {
 // from the audio thread. M1's eight saved native controls remain OS-owned.
 inline void control(ControlState& st,const opxy::control::Input& in,opxy::control::Overlay& overlay) {
   update(st,in);
+  edit_routes(st,in);
   const auto& host=in.host_pattern;
   const bool host_valid=valid_host_pattern(host);
   const u32 cycle=host_valid ? host.cycle : 0;
@@ -354,7 +386,14 @@ inline void control(ControlState& st,const opxy::control::Input& in,opxy::contro
     static_cast<unsigned>(p.editing_lane_octaves)<<2 |
     static_cast<unsigned>(p.editing_anchor_scale)<<3 | lane_octaves<<16 |
     static_cast<unsigned>(p.octave+2)<<8;
-  overlay.display[14]=st.values[6] | st.values[7]<<8 | p.target_c<<16 | p.target_d<<24;
+  const unsigned targets[]={st.values[6],st.values[7],p.target_c,p.target_d};
+  unsigned route_bank=0;
+  for(unsigned lane=0;lane<4;++lane) {
+    const unsigned choice=st.editing_routes ? st.route_choices[lane] :
+      (p.off_mask&(1u<<lane)) ? 0 : targets[lane]+1;
+    route_bank|=choice<<(lane*8);
+  }
+  overlay.display[14]=route_bank;
   overlay.display[15]=p.anchor_cursor | (p.anchor_span-1)<<2 | p.anchor_mask<<12 |
     ((p.anchor_mask>>p.anchor_cursor)&1u)<<8 |
     static_cast<unsigned>(p.anchor_quality[p.anchor_cursor]+1)<<16 |

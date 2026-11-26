@@ -166,7 +166,7 @@
       "palette": 16
     },
     "trackControl": {
-      "stateBytes": 7512,
+      "stateBytes": 7520,
       "stateAlignment": 4,
       "unique": true,
       "aux": [

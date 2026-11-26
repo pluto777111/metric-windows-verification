@@ -48,10 +48,11 @@ int main() {
 
   display_words[9]=3;
   display_words[13]=1 | (2 | 3<<4 | 1<<8 | 4<<12)<<16;
-  display_words[14]=4 | 5<<8 | 6<<16 | 7<<24;
+  display_words[14]=5<<8 | 7<<16 | 8<<24;
   metric::display(state,input,frame);
   assert(state.header.page==0);
   assert(std::strcmp(frame.texts[0].chars,"track a")==0);
+  assert(std::strcmp(frame.header[0],"OFF")==0);
   assert(std::strcmp(frame.header[2],"7")==0);
   display_words[13]=(display_words[13]&~1)|4;
   metric::display(state,input,frame);

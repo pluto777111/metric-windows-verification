@@ -163,6 +163,10 @@ int main() {
   edits.turn_count=4;
   for(unsigned i=0;i<4;++i) edits.turns[i]={static_cast<opxy::u8>(i),0,1};
   control(controls,edits,feedback);
+  assert(controls.settings.target_a==0 && controls.performance.target_c==2);
+  edits.shift=0;
+  edits.turn_count=0;
+  control(controls,edits,feedback);
   assert(decode(written_routes[0],8)==1 && decode(written_routes[1],8)==1);
   assert(controls.settings.target_a==1 && controls.settings.target_b==1);
   assert(controls.performance.target_c==3 && controls.performance.target_d==4);
@@ -190,6 +194,25 @@ int main() {
   control_load(restored,saved,sizeof(saved));
   assert(restored.performance.target_c==3 && restored.performance.target_d==4);
   assert(restored.performance.lane_octave[0]==1 && restored.performance.lane_octave[2]==-1);
+  assert(restored.performance.off_mask==0);
+  edits.page_key=0;
+  edits.shift=1;
+  edits.turn_count=4;
+  for(unsigned i=0;i<4;++i)edits.turns[i]={static_cast<opxy::u8>(i),0,-8};
+  control(controls,edits,feedback);
+  assert(feedback.display[14]==0);
+  edits.shift=0;
+  edits.turn_count=0;
+  control(controls,edits,feedback);
+  assert(controls.performance.off_mask==15);
+  assert(controls.settings.target_a==1 && controls.performance.target_c==3);
+  metric_core::Bar silent{};
+  uint8_t silent_lanes[metric_core::MAX_EVENTS]{};
+  render_generated_lanes(controls.performance,controls.settings,0,silent,silent_lanes);
+  assert(silent.count==0);
+  assert(control_save(controls,saved,sizeof(saved))==sizeof(saved));
+  control_load(restored,saved,sizeof(saved));
+  assert(restored.performance.off_mask==15 && restored.performance.target_c==3);
   control_load(restored,saved,4);
   assert(restored.performance.target_c==2 && restored.performance.lane_octave[0]==0);
 
@@ -234,6 +257,7 @@ int main() {
   context.values[12][7]=0x18000000; // audible companion on track B, zero-based 1
   context.transport.playing=1;
   context.read_pattern=read_source;
+  live.performance.off_mask=1; // Suppress A's output even as A supplies the source for B.
   overlay={};
   control(live,context,overlay);
   assert(source_reads==1 && live.bar.count==3);
