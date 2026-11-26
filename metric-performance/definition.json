@@ -166,13 +166,13 @@
       "palette": 16
     },
     "trackControl": {
-      "stateBytes": 3380,
+      "stateBytes": 7512,
       "stateAlignment": 4,
       "unique": true,
       "aux": [
         12
       ],
-      "savedBytes": 10
+      "savedBytes": 4106
     }
   },
   "press": "page"

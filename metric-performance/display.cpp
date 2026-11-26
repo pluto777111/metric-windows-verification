@@ -57,14 +57,18 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
     const unsigned knob[4]={bank&255,(bank>>8)&255,(bank>>16)&255,bank>>24};
     for(unsigned i=0;i<8;++i) { names[i]=""; values[i][0]=0; }
     if(page==4) {
+      const unsigned steps=opxy::control::from_control(7), held=opxy::control::from_control(8);
       const unsigned span=1+(knob[0]>>2);
-      names[0]="bar"; names[1]="pin"; names[2]="quality"; names[3]="evolve"; names[7]="bar scale";
-      number(values[0],1+(knob[0]&3)*span);
-      copy(values[1],header_capacity,knob[1] ? "ON" : "OFF");
+      static const char* const pins[]={"OFF","PITCH","RHYTHM","BOTH"};
+      names[0]=steps && held ? "step" : "bar";
+      names[1]="pin"; names[2]="quality"; names[3]="evolve";
+      names[7]=steps ? "CV steps" : "bar scale";
+      number(values[0],steps && held ? held : 1+(knob[0]&3)*span);
+      copy(values[1],header_capacity,steps && held ? pins[knob[1]&3] : (knob[1]&1) ? "ON" : "OFF");
       copy(values[2],header_capacity,qualities[knob[2]%3]);
       number(values[3],knob[3]);
-      number(values[7],span);
-      if(modifiers&8u) header_input.shown[3]=7;
+      number(values[7],steps ? steps : span);
+      if((modifiers&8u) && !(steps && held)) header_input.shown[3]=7;
     } else if(page==3 && shifted) {
       static const char* const routes[]={"track A","track B","track C","track D"};
       for(unsigned i=0;i<4;++i) {
@@ -121,20 +125,86 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
   const bool playing=opxy::control::from_control(3)!=0;
   const u32 bar_index=playing?tick/metric_core::BAR_TICKS:0u;
   const unsigned bar_tick=playing?tick%metric_core::BAR_TICKS:0u;
-  metric_core::Bar bar;
-  metric_core::generate(s,bar_index,bar);
-  const auto pattern=metric_visual::exact(bar,s);
 
   text(frame,16,12*unit,55*unit,unit,
        page==4 ? "METRIC / ANCHORS" : page==3 ? "METRIC / OUTPUT" :
        audition ? "METRIC / EVOLUTION" : "METRIC   /   TWO CLOCKS");
   if(audition) {
-    text(frame,17,12*unit,79*unit,unit,"SHARED PHRASE");
-    text(frame,18,12*unit,137*unit,unit,page==4 ? "FOUR-BAR STRUCTURE" : "GEN / TRACK / BOTH");
     for(unsigned i=8;i<42;++i)hide(frame,i);
-    for(unsigned i=19;i<26;++i)text(frame,i,12*unit,201*unit,unit,"");
+    for(unsigned i=17;i<26;++i)text(frame,i,12*unit,201*unit,unit,"");
+    if(page==2) {
+      metric_visual::PhraseView view{};
+      for(unsigned i=0;i<7;++i)
+        view.packed[i]=static_cast<u32>(opxy::control::from_control(metric_visual::preview_words[i]));
+      static const char* const lanes[]={"A","B","C","D"};
+      constexpr unsigned bin_ticks=metric_core::BAR_TICKS/metric_visual::preview_time_bins;
+      for(unsigned lane=0;lane<metric_visual::preview_lanes;++lane) {
+        const unsigned count=(view.packed[6]>>(8*lane))&255;
+        const int row=85+lane*32;
+        if(count)text(frame,17+lane,12*unit,row*unit,unit,lanes[lane]);
+        for(unsigned i=0;i<count && i<metric_visual::preview_per_lane;++i) {
+          const unsigned cell=lane*metric_visual::preview_per_lane+i;
+          const unsigned dot=(view.packed[cell/4]>>(8*(cell%4)))&255;
+          const unsigned onset=(dot&31)*bin_ticks;
+          const int height=static_cast<int>(dot>>5);
+          const bool pulse=bar_tick>=onset && bar_tick-onset<bin_ticks;
+          const int scale=pulse && !input.reduced_motion ? 420+(bin_ticks-(bar_tick-onset))*18 : 420;
+          place(frame,8+cell,metric_visual::xpos(onset)*unit,(row+8-height*2)*unit,
+                scale,pulse ? 10u : 8u,fill_and_stroke);
+        }
+      }
+      if(playing)place(frame,40,metric_visual::xpos(bar_tick)*unit,200*unit,unit,8,fill_and_stroke);
+      else text(frame,17,12*unit,85*unit,unit,"PLAY TO SEE NOTES");
+    } else if(page==4 && opxy::control::from_control(7)>0) {
+      const unsigned cycle=opxy::control::from_control(4), phase=opxy::control::from_control(5);
+      const unsigned markers=opxy::control::from_control(6), steps=opxy::control::from_control(7);
+      const unsigned held=opxy::control::from_control(8);
+      if(cycle) {
+        char playing_step[12];
+        number(playing_step,1+phase/(cycle/steps));
+        text(frame,17,12*unit,82*unit,unit,"STEP");
+        text(frame,18,68*unit,82*unit,unit,playing_step);
+        for(unsigned column=0;column<32;++column)
+          if(markers&(1u<<column))
+            place(frame,8+column,(44+400*column/32)*unit,122*unit,600,9,fill_and_stroke);
+        if(playing)place(frame,40,(44+phase*400/cycle)*unit,104*unit,unit,10,fill_and_stroke);
+        if(held) {
+          place(frame,41,(44+(held-1)*400/steps)*unit,138*unit,unit,10,fill_and_stroke);
+          text(frame,19,12*unit,170*unit,unit,"STEP + TURN TO LOCK");
+        }
+        else if(!markers)text(frame,19,12*unit,170*unit,unit,"HOLD A STEP TO EDIT");
+      }
+    } else if(page==4) {
+      const unsigned anchors=static_cast<u32>(opxy::control::from_control(15));
+      const unsigned span=1+((anchors>>2)&15), length=4*span;
+      const unsigned current=bar_index%length+1;
+      char bar_text[15]="BAR ";
+      number(bar_text+4,current);
+      unsigned end=current<10 ? 5 : 6;
+      bar_text[end++]='/';
+      number(bar_text+end,length);
+      text(frame,17,12*unit,82*unit,unit,bar_text);
+      for(unsigned i=0;i<4;++i) {
+        const unsigned x=44+100*i;
+        const bool pinned=anchors&(1u<<(12+i));
+        const bool selected=i==(anchors&3u);
+        place(frame,8+i,x*unit,121*unit,selected ? unit : 700,
+              pinned ? 10u : 14u,fill_and_stroke);
+        char label[12];
+        number(label,1+i*span);
+        text(frame,19+i,(x-5)*unit,151*unit,unit,label);
+      }
+      if(playing) {
+        const unsigned cycle=length*metric_core::BAR_TICKS;
+        const unsigned x=44+(tick%cycle)*400/cycle;
+        place(frame,40,x*unit,102*unit,unit,9,fill_and_stroke);
+      }
+    }
     return;
   }
+  metric_core::Bar bar;
+  metric_core::generate(s,bar_index,bar);
+  const auto pattern=metric_visual::exact(bar,s);
   text(frame,17,12*unit,79*unit,unit,"A    KICK / REFERENCE");
   text(frame,18,12*unit,137*unit,unit,"B    RATIO / PULSE");
   for(unsigned i=0;i<16;++i){
@@ -166,19 +236,7 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
   text(frame,20,113*unit,201*unit,unit,a_label);
   text(frame,21,137*unit,201*unit,unit,b_label);
   text(frame,22,191*unit,201*unit,unit,ratios[knobs[4]]);
-  // Counts show notes submitted to the host router, not necessarily audible
-  // notes. This helps distinguish control dispatch from instrument routing.
-  char status[48];unsigned k=0;
-  const char* prefix=playing?"PLAY A":"STOP A";
-  for(unsigned i=0;prefix[i] && k<sizeof(status)-1;++i)status[k++]=prefix[i];
-  char nbuf[12];number(nbuf,static_cast<u32>(opxy::control::from_control(5)));
-  for(unsigned i=0;nbuf[i] && k<sizeof(status)-1;++i)status[k++]=nbuf[i];
-  const char* middle=" B";
-  for(unsigned i=0;middle[i] && k<sizeof(status)-1;++i)status[k++]=middle[i];
-  number(nbuf,static_cast<u32>(opxy::control::from_control(6)));
-  for(unsigned i=0;nbuf[i] && k<sizeof(status)-1;++i)status[k++]=nbuf[i];
-  status[k]=0;
-  text(frame,23,12*unit,225*unit,unit,status);
+  text(frame,23,12*unit,201*unit,unit,"");
   char next_b[12];
   number(next_b,metric_visual::next_in_bar(pattern.b,bar_tick));
   text(frame,24,292*unit,201*unit,unit,"B NEXT (TICKS)");

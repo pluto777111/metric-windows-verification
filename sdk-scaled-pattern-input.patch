@@ -1,8 +1,8 @@
 diff --git a/sdk/include/opxy/track_control.hpp b/sdk/include/opxy/track_control.hpp
-index 3083ee1..2142ff6 100644
+index 3083ee1..1b69249 100644
 --- a/sdk/include/opxy/track_control.hpp
 +++ b/sdk/include/opxy/track_control.hpp
-@@ -56,9 +56,18 @@ struct Entry { u8 track, index; u16 reserved; i32 value; };
+@@ -56,9 +56,22 @@ struct Entry { u8 track, index; u16 reserved; i32 value; };
  struct Note { u8 track, pitch, velocity, reserved; u32 length_us; };
  // A turn of one of the machine's own encoders: the parameter slot its page
  // position shows (0..7) and the detents it covers, signed: +1 or -1 for a slow
@@ -19,14 +19,19 @@ index 3083ee1..2142ff6 100644
 +
 +using SetOwnParameter = bool (*)(u32 track, u32 slot, i32 value);
 +
++// A read-only view of the controller's host pattern. Zero cycle means no timing.
++struct HostPattern { u32 cycle, phase, pattern, steps, held_step; };
++constexpr u32 no_held_step = 0xffffffffu;
++
  struct Input {
      u32 track;  // the aux track this machine holds (zero-based)
      // Each track's live values as stock sets them (sequenced, locked or
-@@ -86,6 +95,8 @@ struct Input {
+@@ -86,6 +99,9 @@ struct Input {
      // track turned keeps its turns between ticks.
      u32 turn_count;
      Turn turns[turn_capacity];
 +    SetOwnParameter set_own_parameter; // Aux editor only; nullptr when unavailable.
++    HostPattern host_pattern;
 +    ReadPattern read_pattern; // nullptr in previews without a stock pattern source.
  };
  
@@ -88,7 +93,7 @@ index 4652ad4..3836aa0 100644
  // An encoder click on the note-player page, encoder 0..3: set when a player's
  // page registers (players.cpp), null in builds without a player. It switches a
 diff --git a/sdk/platform/opxy-1.2.1/track_control.cpp b/sdk/platform/opxy-1.2.1/track_control.cpp
-index 1178e20..8d64d91 100644
+index 1178e20..2fd8969 100644
 --- a/sdk/platform/opxy-1.2.1/track_control.cpp
 +++ b/sdk/platform/opxy-1.2.1/track_control.cpp
 @@ -68,6 +68,7 @@
@@ -142,7 +147,7 @@ index 1178e20..8d64d91 100644
      return true;
  }
  
-@@ -401,6 +411,59 @@ extern "C" void sdk_control_forget() {
+@@ -401,6 +411,87 @@ extern "C" void sdk_control_forget() {
      release_all = held_count != 0;
  }
  
@@ -161,6 +166,34 @@ index 1178e20..8d64d91 100644
 +u32 song_ticks(u32 position, u32 rate, u32 stretch) {
 +    const u32 divisor = 20 * rate;  // Stock uses 480 ticks/step; song time uses 24.
 +    return (position * stretch + divisor / 2) / divisor;
++}
++
++control::HostPattern control_host_pattern(u32 track) {
++    control::HostPattern result{0,0,0,0,control::no_held_step};
++    if (track < control::tracks || track >= control::all_tracks) return result;
++    const u32 project = word(0x840a0524);
++    if (!project || word(kProjectLoading)) return result;
++    const u32 pattern = stock<u32(u32)>(0x8d586014)(track);
++    const u32 first = project + 0xd7c + track * 0x53f44;
++    if (pattern < first || pattern-first >= 16*0x53f4 || (pattern-first)%0x53f4) return result;
++    const u32 steps = stock<u32(u32)>(0x8d586800)(track);
++    const u32 scale = stock<u32(u32)>(0x8d586b50)(track);
++    if (!steps || steps > 128 || scale >= 16) return result;
++    const u32 rate = word(0x840a36e0 + scale * 8);
++    const u32 stretch = word(0x840a36e4 + scale * 8);
++    if (!rate || rate > 24 || 24 % rate || !stretch || stretch > 32) return result;
++    const i32 length = static_cast<i32>(480 * steps);
++    const i32 position = stock<i32(u32, u32)>(0x8d592a94)(0x860c6adc, track) % length;
++    result.cycle = song_ticks(length, rate, stretch);
++    result.phase = song_ticks(position < 0 ? position + length : position, rate, stretch) % result.cycle;
++    result.pattern = (pattern-first)/0x53f4;
++    result.steps = steps;
++    if (track == selected_track() && stock<u32()>(0x8d5b7e34)()) {
++        const u32 key = stock<u32()>(0x8d5b7e4c)();
++        const u32 step = key + 16 * stock<u32(u32)>(0x8d585fb4)(track);
++        if (key < 16 && step < steps) result.held_step = step;
++    }
++    return result;
 +}
 +
 +bool read_control_pattern(u32 track, control::PatternEvent* events, u32 capacity,
@@ -202,7 +235,7 @@ index 1178e20..8d64d91 100644
  extern "C" void sdk_gui_tick() {
      stock<void()>(0x8d580074)();
      ++gui_ticks;
-@@ -409,6 +472,9 @@ extern "C" void sdk_gui_tick() {
+@@ -409,6 +500,9 @@ extern "C" void sdk_gui_tick() {
      // The turn hooks (synth_controls.cpp) reach this service through a pointer,
      // set here so it is set only where the service is linked.
      sdk_control_turn = sdk_control_turn_offer;
@@ -212,7 +245,7 @@ index 1178e20..8d64d91 100644
      // The aux service still keeps a held track's mark while a project loads.
      if (sdk_aux.tick) sdk_aux.tick();
      if (word(kProjectLoading)) return;
-@@ -483,6 +549,7 @@ extern "C" void sdk_gui_tick() {
+@@ -483,6 +577,7 @@ extern "C" void sdk_gui_tick() {
              for (u32 i = 0; i < applied_count; ++i)
                  input.values[applied[i].track][applied[i].index] = applied[i].underlying;
              input.transport = opxy::Transport{project_bpm_x10(), word(kTicks96), playing};
@@ -220,10 +253,11 @@ index 1178e20..8d64d91 100644
              loaded = true;
          }
          // The host's own controls as its page shows them, LFO included.
-@@ -492,6 +559,7 @@ extern "C" void sdk_gui_tick() {
+@@ -492,6 +587,8 @@ extern "C" void sdk_gui_tick() {
              input.values[t][p] = shown(t, p);
          }
          input.track = t;
++        input.host_pattern = control_host_pattern(t);
 +        input.set_own_parameter = edit_own_aux_parameter;
          input.page_key = sdk_synth_page_key(t);
          input.muted = muted(t);

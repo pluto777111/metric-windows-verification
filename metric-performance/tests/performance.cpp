@@ -193,6 +193,29 @@ int main() {
   control_load(restored,saved,4);
   assert(restored.performance.target_c==2 && restored.performance.lane_octave[0]==0);
 
+  edits.page_key=4;
+  edits.turn_count=0;
+  control(controls,edits,feedback);
+  edits.page_key=0;
+  edits.host_pattern={768,192,3,16,4};
+  edits.turn_count=3;
+  edits.turns[0]={1,0,3};
+  edits.turns[1]={2,0,2};
+  edits.turns[2]={3,0,8};
+  control(controls,edits,feedback);
+  const unsigned locked=controls.step_cues[3][4];
+  assert((locked&3)==(pin_pitch|pin_rhythm) && cue_quality(locked)==2 && cue_evolve(locked)==32);
+  assert(controls.step_cues[2][4]==0 && controls.step_cues[3][3]==0);
+  assert(static_cast<unsigned>(feedback.display[6])==(1u<<8));
+  opxy::u8 project[4106];
+  const unsigned bytes=control_save(controls,project,sizeof(project));
+  control_load(restored,project,bytes);
+  assert(restored.step_cues[3][4]==locked);
+  edits.turn_count=1;
+  edits.turns[0]={0,0,-1};
+  control(controls,edits,feedback);
+  assert(controls.step_cues[3][4]==0 && feedback.display[6]==0);
+
   metric_core::Bar collisions{};
   uint8_t lanes[metric_core::MAX_EVENTS]{};
   append_performance_event(collisions,lanes,{0,1,60,90,48},0,false);
@@ -247,6 +270,21 @@ int main() {
   window.count=0;
   render_programmed_phrase(tracked,source_settings,0,&short_note,1,96,24,window,lanes);
   assert(window.count==4 && window.events[0].tick==88 && window.events[3].tick==376);
+
+  uint16_t step_cues[16]{}, resolved[16]{};
+  step_cues[4]=make_cue(pin_pitch|pin_rhythm,2,100);
+  step_cues[6]=make_cue(0,1,0);
+  active_cues(step_cues,resolved,16);
+  const CueWindow cues{resolved,384,0,24};
+  assert(cues.at(95)==step_cues[6] && cues.at(96)==step_cues[4]);
+  assert(cues.at(-1)==step_cues[6] && cues.at(480)==step_cues[4]);
+  tracked.output=static_cast<unsigned>(OutputMode::tonal);
+  const opxy::control::PatternEvent anchor_notes[]={{0,8,60,90},{96,8,64,90},{192,8,67,90}};
+  source_settings.rotation=1;
+  window.count=0;
+  render_programmed_phrase(tracked,source_settings,0,anchor_notes,3,384,0,window,lanes,cues);
+  assert(window.count==3 && window.events[0].tick==24 && window.events[1].tick==96 && window.events[1].pitch==64);
+  assert(window.events[2].tick==216);
 
   // Same-pitch collisions use the destination pattern's own phase and wrap.
   source_timing={504,500};

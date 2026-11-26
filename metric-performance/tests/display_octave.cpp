@@ -67,4 +67,27 @@ int main() {
   assert(std::strcmp(frame.texts[3].chars,"bar scale")==0);
   assert(std::strcmp(frame.header[3],"3")==0);
   assert(std::strcmp(frame.header[0],"1")==0);
+  display_words[3]=1;
+  display_words[0]=4*metric_core::BAR_TICKS;
+  display_words[15]|=9<<12;
+  metric::display(state,input,frame);
+  assert(std::strcmp(frame.texts[17].chars,"BAR 5/12")==0);
+  assert(std::strcmp(frame.texts[22].chars,"10")==0);
+  assert(frame.nodes[8].shade==10 && frame.nodes[9].shade==14);
+
+  display_words[9]=2;
+  display_words[0]=36;
+  display_words[1]=(3 | 7<<5)<<8;
+  display_words[8]=2;
+  metric::display(state,input,frame);
+  assert(frame.nodes[8].x<frame.nodes[9].x && frame.nodes[8].y>frame.nodes[9].y);
+  assert(frame.nodes[9].shade==10);
+
+  display_words[9]=1;
+  display_words[3]=1;
+  display_words[5]=565;
+  display_words[6]=888;
+  metric::display(state,input,frame);
+  assert(frame.texts[23].chars[0]=='\0');
+  assert(std::strcmp(frame.texts[19].chars,"ROUTE A/B")==0);
 }

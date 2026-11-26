@@ -2,6 +2,16 @@
 #include <cassert>
 #include <cstdio>
 int main(){
+  metric_core::Bar phrase{};
+  uint8_t lanes[metric_core::MAX_EVENTS]{};
+  for(unsigned i=0;i<8;++i)
+    phrase.events[phrase.count++]={static_cast<uint16_t>(i*24),0,static_cast<uint8_t>(60+i),90,12};
+  const auto tonal=metric_visual::phrase_view(phrase,lanes,false);
+  assert(tonal.packed[6]==6);
+  assert((tonal.packed[0]&255)==0);
+  assert(((tonal.packed[1]>>8)&255)==(14 | 7<<5));
+  const auto drum=metric_visual::phrase_view(phrase,lanes,true);
+  assert((drum.packed[0]&255)==4<<5);
   metric_core::Settings s;metric_core::Bar bar;
   s.density=0; // Ratio anchor positions only; additions tested below.
   for(unsigned ratio=0;ratio<3;++ratio){

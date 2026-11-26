@@ -2,6 +2,7 @@
 #include "metric_engine.hpp"
 #include "core.h"
 #include "native_performance.hpp"
+#include "metric_visual.hpp"
 
 namespace metric {
 using opxy::u32;
@@ -19,6 +20,9 @@ struct ControlState {
   uint8_t lanes[metric_core::MAX_EVENTS];
   u32 event_count;
   u32 sent_a, sent_b; // session-local routed note counters
+  metric_visual::PhraseView view;
+  u32 host_pattern, host_cycle;
+  uint16_t step_cues[cue_patterns][cue_steps];
   Performance performance;
 };
 
@@ -46,8 +50,19 @@ inline unsigned adjust(unsigned value, i32 detents, unsigned maximum) {
   const i32 next=static_cast<i32>(value)+detents;
   return next<0 ? 0u : next>static_cast<i32>(maximum) ? maximum : static_cast<unsigned>(next);
 }
+inline bool valid_host_pattern(const opxy::control::HostPattern& host) {
+  return host.cycle && host.steps && host.steps<=cue_steps && !(host.cycle%host.steps) &&
+    host.phase<host.cycle && host.pattern<cue_patterns;
+}
+inline unsigned held_cue(const ControlState& st,const opxy::control::HostPattern& host) {
+  const unsigned saved=st.step_cues[host.pattern][host.held_step];
+  return saved ? saved : make_cue(0,st.performance.anchor_quality[st.performance.anchor_cursor]+1,
+                                  st.performance.evolve);
+}
 inline void edit_performance(ControlState& st, const opxy::control::Input& in) {
   auto& p=st.performance;
+  const auto& host=in.host_pattern;
+  const bool edit_step=p.page==4 && valid_host_pattern(host) && host.held_step<host.steps;
   for (u32 i=0; i<in.turn_count && i<opxy::control::turn_capacity; ++i) {
     const auto& turn=in.turns[i];
     const unsigned knob=turn.slot%4;
@@ -58,10 +73,24 @@ inline void edit_performance(ControlState& st, const opxy::control::Input& in) {
       if(p.page==4 && knob==3 && !in.shift) p.editing_anchor_scale=!p.editing_anchor_scale;
       continue;
     }
+    if(edit_step) {
+      auto& slot=st.step_cues[host.pattern][host.held_step];
+      const unsigned old=held_cue(st,host);
+      unsigned pins=old&3, quality=cue_quality(old), evolve=cue_evolve(old);
+      if(knob==1) pins=adjust(pins,detents,3);
+      if(knob==2) quality=adjust(quality,detents,2);
+      if(knob==3) evolve=adjust(evolve,detents*4,100);
+      const uint16_t next=knob==0 && detents<0 ? 0 : make_cue(pins,quality,evolve);
+      if(next!=slot) {
+        slot=next;
+        st.generated=0;
+      }
+      continue;
+    }
     if (p.page==4) {
       if (knob==0) p.anchor_cursor=adjust(p.anchor_cursor,detents,3);
       if (p.editing_anchor_scale && knob==3) {
-        p.anchor_span=adjust(p.anchor_span-1,detents,15)+1;
+        if(!valid_host_pattern(host)) p.anchor_span=adjust(p.anchor_span-1,detents,15)+1;
         continue;
       }
       if (knob==1) {
@@ -151,8 +180,16 @@ inline void ensure_bar(ControlState& st,u32 index,const opxy::control::Input& in
   if(st.generated && st.current_bar==index) return;
   st.bar.count=0;
   const auto& p=st.performance;
+  const auto& host=in.host_pattern;
+  uint16_t steps[cue_steps];
+  CueWindow cues{};
+  if(valid_host_pattern(host)) {
+    active_cues(st.step_cues[host.pattern],steps,host.steps);
+    if(steps[0]) cues=CueWindow{steps,host.cycle,
+        pattern_phase_at_bar({host.cycle,host.phase},in.transport.ticks96,index),host.cycle/host.steps};
+  }
   if(p.source_mode!=1)
-    render_generated_lanes(p,st.settings,index,st.bar,st.lanes);
+    render_generated_lanes(p,st.settings,index,st.bar,st.lanes,cues);
   if(p.source_mode!=0) {
     if(in.read_pattern) {
       if(st.settings.target_a!=st.settings.target_b) {
@@ -161,13 +198,14 @@ inline void ensure_bar(ControlState& st,u32 index,const opxy::control::Input& in
         opxy::control::PatternTiming timing{};
         if(in.read_pattern(st.settings.target_a,notes,120,count,timing) && count<=120 && timing.cycle)
           render_programmed_phrase(p,st.settings,index,notes,count,timing.cycle,
-              pattern_phase_at_bar(timing,in.transport.ticks96,index),st.bar,st.lanes);
+              pattern_phase_at_bar(timing,in.transport.ticks96,index),st.bar,st.lanes,cues);
       }
     } else if(p.source_mode==1) {
       render_shared_phrase(st.performance,st.settings,index,st.bar,st.lanes);
     }
   }
   if(in.read_pattern) protect_programmed_notes(st,index,in);
+  st.view=metric_visual::phrase_view(st.bar,st.lanes,p.output==static_cast<unsigned>(OutputMode::drum));
   st.current_bar=index;
   st.generated=1;
 }
@@ -175,6 +213,9 @@ inline void control_reset(ControlState& st) {
   st.version=kVersion; st.next_tick=0; st.last_tick=0;
   st.current_bar=0; st.playing=0; st.generated=0; st.event_count=0;
   st.sent_a=0; st.sent_b=0;
+  st.view={};
+  st.host_pattern=st.host_cycle=0;
+  for(auto& pattern : st.step_cues)for(auto& cue : pattern)cue=0;
   for(u32 i=0;i<8;++i) st.values[i]=0;
   st.settings={0,50,0,4,0,1,36,42,0,0};
   st.bar.count=0;
@@ -210,21 +251,42 @@ inline u32 control_save(const ControlState& st, opxy::u8* data,u32 capacity) {
   data[4]=st.performance.target_c;
   data[5]=st.performance.target_d;
   for(u32 i=0;i<4;++i)data[6+i]=st.performance.lane_octave[i]+2;
-  return 10;
+  u32 last=10;
+  for(u32 pattern=0;pattern<cue_patterns;++pattern)for(u32 step=0;step<cue_steps;++step) {
+    const u32 at=10+2*(pattern*cue_steps+step);
+    if(at+2>capacity)return last;
+    const unsigned cue=st.step_cues[pattern][step];
+    data[at]=cue&255;
+    data[at+1]=cue>>8;
+    if(cue)last=at+2;
+  }
+  return last;
 }
 inline void control_load(ControlState& st,const opxy::u8* data,u32 size) {
   control_reset(st);
-  if(!data || size!=10)return;
+  if(!data || size<10 || size>10+2*cue_patterns*cue_steps || size%2)return;
   for(u32 i=0;i<4;++i)if(data[i]!=static_cast<opxy::u8>(kVersion>>(8*i)))return;
   if(data[4]<8)st.performance.target_c=data[4];
   if(data[5]<8)st.performance.target_d=data[5];
   for(u32 i=0;i<4;++i)if(data[6+i]<5)st.performance.lane_octave[i]=static_cast<int>(data[6+i])-2;
+  for(u32 at=10;at<size;at+=2) {
+    const unsigned cue=data[at] | static_cast<unsigned>(data[at+1])<<8;
+    const unsigned index=(at-10)/2;
+    if(valid_cue(cue))st.step_cues[index/cue_steps][index%cue_steps]=cue;
+  }
 }
 
 // Note playback is advanced in transport-tick order and never scheduled
 // from the audio thread. M1's eight saved native controls remain OS-owned.
 inline void control(ControlState& st,const opxy::control::Input& in,opxy::control::Overlay& overlay) {
   update(st,in);
+  const auto& host=in.host_pattern;
+  const bool host_valid=valid_host_pattern(host);
+  const u32 cycle=host_valid ? host.cycle : 0;
+  if(st.host_cycle!=cycle || (host_valid && st.host_pattern!=host.pattern))
+    st.generated=0;
+  st.host_cycle=cycle;
+  st.host_pattern=host_valid ? host.pattern : 0;
   // The previous callback decides which page owned any queued turns.
   if (st.performance.page>=2) edit_performance(st,in);
   if (in.page_key>=1 && in.page_key<=4) {
@@ -278,6 +340,11 @@ inline void control(ControlState& st,const opxy::control::Input& in,opxy::contro
   overlay.display[8]=static_cast<i32>(in.transport.bpm_x10);
   overlay.display[9]=st.performance.page;
   const auto& p=st.performance;
+  if(p.page==2) {
+    const bool show=st.playing && st.generated && !in.muted && st.current_bar==now/metric_core::BAR_TICKS;
+    for(unsigned i=0;i<7;++i)
+      overlay.display[metric_visual::preview_words[i]]=show ? static_cast<i32>(st.view.packed[i]) : 0;
+  }
   overlay.display[10]=p.distance | p.pitch_motion<<8 | p.freedom<<16 | p.tension<<24;
   overlay.display[11]=p.interplay | p.destination<<8 | p.journey<<16 | p.pace<<24;
   overlay.display[12]=p.output | p.root<<8 | p.scale<<16 | p.source_mode<<24;
@@ -288,8 +355,23 @@ inline void control(ControlState& st,const opxy::control::Input& in,opxy::contro
     static_cast<unsigned>(p.editing_anchor_scale)<<3 | lane_octaves<<16 |
     static_cast<unsigned>(p.octave+2)<<8;
   overlay.display[14]=st.values[6] | st.values[7]<<8 | p.target_c<<16 | p.target_d<<24;
-  overlay.display[15]=p.anchor_cursor | (p.anchor_span-1)<<2 | ((p.anchor_mask>>p.anchor_cursor)&1u)<<8 |
+  overlay.display[15]=p.anchor_cursor | (p.anchor_span-1)<<2 | p.anchor_mask<<12 |
+    ((p.anchor_mask>>p.anchor_cursor)&1u)<<8 |
     static_cast<unsigned>(p.anchor_quality[p.anchor_cursor]+1)<<16 |
     p.evolve<<24;
+  if(p.page==4 && host_valid) {
+    unsigned markers=0;
+    for(unsigned step=0;step<host.steps;++step)
+      if(st.step_cues[host.pattern][step])markers|=1u<<(step*32/host.steps);
+    overlay.display[4]=cycle;
+    overlay.display[5]=host.phase;
+    overlay.display[6]=static_cast<i32>(markers);
+    overlay.display[7]=host.steps;
+    overlay.display[8]=host.held_step<host.steps ? host.held_step+1 : 0;
+    if(host.held_step<host.steps) {
+      const unsigned cue=held_cue(st,host);
+      overlay.display[15]=host.held_step | (cue&3)<<8 | cue_quality(cue)<<16 | cue_evolve(cue)<<24;
+    }
+  } else if(p.page==4) overlay.display[7]=0;
 }
 }

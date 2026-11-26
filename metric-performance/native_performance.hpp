@@ -3,6 +3,7 @@
 #include "example.hpp"
 #include "track_feed.hpp"
 #include "output_pitch.hpp"
+#include "anchor_cues.hpp"
 
 namespace metric {
 
@@ -94,8 +95,7 @@ inline void render_shared_phrase(Performance& performance, const metric_core::Se
         const int answer_delay = lane==1 && performance.interplay==2 ? 48 : 0;
         event.tick=(int(event.tick)+offset+answer_delay+int(metric_core::BAR_TICKS))%metric_core::BAR_TICKS;
         event.pitch=output_pitch(mode,note.degree,performance.root,performance.scale);
-        if(mode!=OutputMode::drum)
-            event.pitch=shifted_octave(event.pitch,performance.octave+performance.lane_octave[lane]);
+        if(mode!=OutputMode::drum) event.pitch=shifted_octave(event.pitch,performance.octave);
         event.velocity=note.accent ? 105 : event.velocity;
         lanes[keep]=static_cast<uint8_t>(lane);
         output.events[keep++]=event;
@@ -123,12 +123,13 @@ inline unsigned locked_pitch(unsigned pitch,unsigned root,unsigned scale) {
     return pitch;
 }
 
-inline unsigned evolved_pitch(const Performance& p, unsigned pitch, unsigned bar, unsigned start) {
+inline unsigned evolved_pitch(const Performance& p, unsigned pitch, unsigned bar,unsigned start,unsigned cue=0) {
     const unsigned phase=(bar/(p.anchor_span?p.anchor_span:1))%4;
-    if(!p.evolve || (p.anchor_mask & (1u<<phase))) return pitch;
-    const int quality=p.anchor_quality[phase];
+    const unsigned amount=cue ? cue_evolve(cue) : p.evolve;
+    if(!amount || (cue ? (cue&pin_pitch)!=0 : (p.anchor_mask & (1u<<phase))!=0)) return pitch;
+    const int quality=cue ? static_cast<int>(cue_quality(cue))-1 : p.anchor_quality[phase];
     const int next=static_cast<int>(pitch)+
-        (static_cast<int>(start)-static_cast<int>(pitch)+quality*3)*static_cast<int>(p.evolve)/100;
+        (static_cast<int>(start)-static_cast<int>(pitch)+quality*3)*static_cast<int>(amount)/100;
     return next<0 ? 0u : next>127 ? 127u : static_cast<unsigned>(next);
 }
 
@@ -156,7 +157,7 @@ inline void append_performance_event(metric_core::Bar& output, uint8_t* lanes,
 }
 
 inline void render_generated_lanes(const Performance& p,const metric_core::Settings& master,
-                                   unsigned bar,metric_core::Bar& out,uint8_t* lanes) {
+                                   unsigned bar,metric_core::Bar& out,uint8_t* lanes,const CueWindow& cues={}) {
     constexpr unsigned contours[4][8]={
         {0,0,4,2,0,2,1,0}, {0,2,4,6,4,2,1,0},
         {0,2,0,3,0,2,4,1}, {0,1,3,5,3,2,1,0}
@@ -177,17 +178,19 @@ inline void render_generated_lanes(const Performance& p,const metric_core::Setti
             const unsigned part=event.pitch==settings.pitch_a ? 0 : 1;
             const unsigned lane=pair*2+part;
             const unsigned note=order[part]++;
-            if(p.tension>=50 && note==2) continue;
-            if(p.interplay==1 && part && event.tick%96<12) continue;
-            if(p.interplay==2 && part) event.tick=(event.tick+48)%metric_core::BAR_TICKS;
-            if(p.distance && note%2)
-                event.tick=(event.tick+p.distance/5)%metric_core::BAR_TICKS;
+            const unsigned cue=cues.at(event.tick);
+            if(!(cue&pin_rhythm)) {
+                if(p.tension>=50 && note==2) continue;
+                if(p.interplay==1 && part && event.tick%96<12) continue;
+                if(p.interplay==2 && part) event.tick=(event.tick+48)%metric_core::BAR_TICKS;
+                if(p.distance && note%2) event.tick=(event.tick+p.distance/5)%metric_core::BAR_TICKS;
+            }
             unsigned degree=contours[lane][note%8];
-            if(p.pitch_motion && note%2) degree=(degree+p.pitch_motion/20)%7;
+            if(!(cue&pin_pitch) && p.pitch_motion && note%2) degree=(degree+p.pitch_motion/20)%7;
             unsigned pitch=mode==OutputMode::drum ? (lane==0?36:lane==1?42:lane==2?38:46) :
                            output_pitch(mode,degree,p.root,p.scale)+(lane%2?12:0);
             if(mode!=OutputMode::drum)
-                pitch=evolved_pitch(p,pitch,bar,48+p.root+(lane%2?12:0));
+                pitch=evolved_pitch(p,pitch,bar,48+p.root+(lane%2?12:0),cue);
             if(mode!=OutputMode::drum) pitch=shifted_octave(pitch,p.octave+p.lane_octave[lane]);
             if(mode==OutputMode::scale_lock) pitch=locked_pitch(pitch,p.root,p.scale);
             event.pitch=static_cast<uint8_t>(pitch);
@@ -206,7 +209,7 @@ inline unsigned pattern_phase_at_bar(const opxy::control::PatternTiming& timing,
 inline void render_programmed_phrase(const Performance& p, const metric_core::Settings& master,
                                      unsigned bar, const opxy::control::PatternEvent* notes,
                                      unsigned count, unsigned cycle, unsigned phase,
-                                     metric_core::Bar& out, uint8_t* lanes) {
+                                     metric_core::Bar& out, uint8_t* lanes,const CueWindow& cues={}) {
     const unsigned period=p.pace ? p.pace : 1;
     const auto mode=static_cast<OutputMode>(p.output);
     const unsigned rotation=(master.rotation+(bar/period)%metric_core::bounded_phrase(master.phrase_bars))*24;
@@ -217,39 +220,46 @@ inline void render_programmed_phrase(const Performance& p, const metric_core::Se
             if(notes[i].velocity>notes[omit].velocity) omit=i;
     }
     for(unsigned i=0;i<count;++i) {
-        if(i==omit) continue;
         const auto& n=notes[i];
-        unsigned pitch=n.pitch;
         unsigned offset=rotation;
         if(p.interplay==2) offset+=48;
         if(p.distance && p.target!=0) {
             const unsigned motion=p.distance/10;
             offset+=p.journey==2 && (i*37+bar*11)%100<p.freedom ? motion*2 : motion;
         }
-        if(p.pitch_motion && p.target!=0 && p.destination && mode!=OutputMode::drum && (bar/period+i)%2) {
-            const unsigned motion=p.pitch_motion/10;
-            if(pitch+motion<=127) pitch+=motion;
-        }
         const unsigned transformed=(n.tick+offset)%cycle;
-        const unsigned first=(transformed+cycle-phase)%cycle;
-        if(first>=metric_core::BAR_TICKS) continue;
+        bool keep_evolved=i!=omit;
         if(p.interplay==1) {
-            bool near=false;
             for(unsigned j=0;j<count;++j) {
                 const unsigned gap=evolution::distance(transformed,notes[j].tick);
-                if(gap<=12 || cycle-gap<=12) { near=true; break; }
+                if(gap<=12 || cycle-gap<=12) { keep_evolved=false; break; }
             }
-            if(near) continue;
         }
-        if(mode!=OutputMode::drum) pitch=evolved_pitch(p,pitch,bar,notes[0].pitch);
-        if(mode!=OutputMode::drum) pitch=shifted_octave(pitch,p.octave+p.lane_octave[1]);
-        if(mode==OutputMode::scale_lock) pitch=locked_pitch(pitch,p.root,p.scale);
-        if(mode==OutputMode::drum && pitch!=36 && pitch!=38 && pitch!=42 && pitch!=46)
-            pitch=output_pitch(mode,pitch%7,p.root,p.scale);
         const auto length=static_cast<uint16_t>(n.length>1536 ? 1536 : n.length);
-        for(unsigned tick=first;tick<metric_core::BAR_TICKS && out.count<metric_core::MAX_EVENTS;tick+=cycle)
-            append_performance_event(out,lanes,
-                {static_cast<uint16_t>(tick),master.target_b,static_cast<uint8_t>(pitch),n.velocity,length},1,false);
+        auto emit=[&](unsigned onset,unsigned delay,bool pinned) {
+            for(unsigned tick=(onset+cycle-phase)%cycle;
+                tick<metric_core::BAR_TICKS && out.count<metric_core::MAX_EVENTS;tick+=cycle) {
+                const unsigned cue=cues.at(static_cast<int>(tick)-static_cast<int>(delay));
+                if(((cue&pin_rhythm)!=0)!=pinned) continue;
+                unsigned pitch=n.pitch;
+                if(!(cue&pin_pitch) && p.pitch_motion && p.target!=0 && p.destination &&
+                   mode!=OutputMode::drum && (bar/period+i)%2) {
+                    const unsigned motion=p.pitch_motion/10;
+                    if(pitch+motion<=127) pitch+=motion;
+                }
+                if(mode!=OutputMode::drum) {
+                    pitch=evolved_pitch(p,pitch,bar,notes[0].pitch,cue);
+                    pitch=shifted_octave(pitch,p.octave);
+                }
+                if(mode==OutputMode::scale_lock) pitch=locked_pitch(pitch,p.root,p.scale);
+                if(mode==OutputMode::drum && pitch!=36 && pitch!=38 && pitch!=42 && pitch!=46)
+                    pitch=output_pitch(mode,pitch%7,p.root,p.scale);
+                append_performance_event(out,lanes,
+                    {static_cast<uint16_t>(tick),master.target_b,static_cast<uint8_t>(pitch),n.velocity,length},1,false);
+            }
+        };
+        if(keep_evolved) emit(transformed,offset,false);
+        if(cues.active) emit(n.tick,0,true);
     }
 }
 
