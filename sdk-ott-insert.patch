@@ -1,5 +1,5 @@
 diff --git a/builder/core.mjs b/builder/core.mjs
-index 1defcfb..913c4c1 100644
+index 1defcfb..1ab6df6 100644
 --- a/builder/core.mjs
 +++ b/builder/core.mjs
 @@ -10,7 +10,7 @@ export const selectArtwork = Graphics.selectArtwork;
@@ -7,12 +7,12 @@ index 1defcfb..913c4c1 100644
  // (write_builder inlines this same file's content for the offline export).
  import DEFAULT_PRESET_TEMPLATE from '../tooling/default_preset.json' with { type: 'json' };
 -export const PROFILE_SHA256 = '1bad5bdbf79ade17ef46bb0a668787cdb359254329809d888e953e1311b22bd1';
-+export const PROFILE_SHA256 = 'c6f79a8d6bcd5cfd0f14c8e8d507a6a3d7a503aab77ddfb66cb97560de709e32';
++export const PROFILE_SHA256 = 'c11424473570360b62596d58feffa32cbb00333fc49223a1700b2f2921f541c3';
  export function requireThat(ok, message) { if (!ok) throw new Error(message); }
  const check = requireThat;
  const utf8 = new TextEncoder();
 diff --git a/profiles/opxy-1.2.1.json b/profiles/opxy-1.2.1.json
-index e17c08b..2e27432 100644
+index e17c08b..2dc25b9 100644
 --- a/profiles/opxy-1.2.1.json
 +++ b/profiles/opxy-1.2.1.json
 @@ -140,6 +140,13 @@
@@ -43,7 +43,7 @@ index e17c08b..2e27432 100644
      },
 +    {
 +      "kind": "hook",
-+      "name": "Instrument M3 and encoder presses: OTT panel",
++      "name": "Instrument M2 and encoder presses: OTT panel",
 +      "address": "0x8c0b2e4c",
 +      "file_offset": "0xea088",
 +      "length": 8,
@@ -54,13 +54,13 @@ index e17c08b..2e27432 100644
 +    },
 +    {
 +      "kind": "hook",
-+      "name": "Instrument shifted controls: OTT panel",
-+      "address": "0x8c0b28a8",
-+      "file_offset": "0xe9ae4",
++      "name": "Shifted encoder clicks: protect the OTT bypass shortcut",
++      "address": "0x8c0b5b94",
++      "file_offset": "0xecdd0",
 +      "length": 8,
-+      "before": "00e80000e3051832",
-+      "symbol": "sdk_ott_shift",
-+      "call": false,
++      "before": "499109ad6100000c",
++      "symbol": "sdk_ott_shifted_key",
++      "call": true,
 +      "service": "ott_insert"
 +    },
 +    {
@@ -76,11 +76,11 @@ index e17c08b..2e27432 100644
 +    },
 +    {
 +      "kind": "hook",
-+      "name": "Instrument Filter frame: OTT panel",
-+      "address": "0x8d539660",
-+      "file_offset": "0x1708bc",
++      "name": "Instrument Envelope frame: OTT panel",
++      "address": "0x8d5366f8",
++      "file_offset": "0x16d954",
 +      "length": 8,
-+      "before": "00e85f00e305666f",
++      "before": "00e86000e305066f",
 +      "symbol": "sdk_ott_frame",
 +      "call": false,
 +      "service": "ott_insert"
@@ -167,10 +167,10 @@ index 0000000..baa864a
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..b2b9519
+index 0000000..8ae7fd6
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,141 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
@@ -181,7 +181,7 @@ index 0000000..b2b9519
 +    TrackSettings track[TrackInserts::track_count];
 +};
 +
-+enum class Page { other, filter, ott };
++enum class Page { other, envelope, ott };
 +enum class InputResult { stock, handled, page_changed, settings_changed, insert_limit };
 +
 +struct EncoderValue {
@@ -201,21 +201,21 @@ index 0000000..b2b9519
 +class DeviceControls {
 +public:
 +    void select(u32 track, Page stock_page) {
-+        if (track != track_ || stock_page != Page::filter) open_ = false;
++        if (track != track_ || stock_page != Page::envelope) open_ = false;
 +        track_ = track;
 +        stock_page_ = stock_page;
 +    }
 +
 +    Page page() const { return open_ ? Page::ott : stock_page_; }
 +
-+    // Call for an unshifted press when the stock page was Filter immediately
-+    // before the event. The platform still owns initial entry into Filter.
-+    InputResult m3(bool shifted) {
-+        if (shifted) {
++    // The first M2 press selects the stock envelope screen. Repeat M2 to
++    // switch between it and OTT. Every other module key stays with stock.
++    InputResult module(u32 number, bool shifted) {
++        if (number != 2 || shifted) {
 +            open_ = false;
 +            return InputResult::stock;
 +        }
-+        if (track_ >= TrackInserts::track_count || stock_page_ != Page::filter)
++        if (track_ >= TrackInserts::track_count || stock_page_ != Page::envelope)
 +            return InputResult::stock;
 +        open_ = !open_;
 +        return InputResult::page_changed;
@@ -239,7 +239,8 @@ index 0000000..b2b9519
 +    }
 +
 +    InputResult turn(u32 encoder, bool shifted, i32 detents, u32 acceleration) {
-+        if (!open_ || shifted || encoder >= 4) return InputResult::stock;
++        if (!open_ || encoder >= 4) return InputResult::stock;
++        if (shifted) return InputResult::handled;
 +        const Binding param = binding(encoder);
 +        i32& value = project_.track[track_].controls.*param.value;
 +        const i32 bounded = detents < -127 ? -127 : detents > 127 ? 127 : detents;
@@ -253,8 +254,8 @@ index 0000000..b2b9519
 +        return InputResult::settings_changed;
 +    }
 +
-+    bool panel(bool shifted, Panel& panel) const {
-+        if (!open_ || shifted) return false;
++    bool panel(Panel& panel) const {
++        if (!open_) return false;
 +        const auto& settings = project_.track[track_];
 +        panel.track_number = track_ + 1;
 +        panel.enabled = settings.enabled;
@@ -758,10 +759,10 @@ index 0000000..2e0c707
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_hooks.s b/sdk/platform/opxy-1.2.1/ott_hooks.s
 new file mode 100644
-index 0000000..fd7c67e
+index 0000000..f7403ee
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_hooks.s
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,50 @@
 +.section .text
 +.align 2
 +
@@ -780,13 +781,16 @@ index 0000000..fd7c67e
 +    SP += -20;
 +    resume sdk_ott_stock_buttons, 0x8c0b, 0x2e54
 +
-+.global sdk_ott_stock_shift
-+.type sdk_ott_stock_shift, STT_FUNC
-+sdk_ott_stock_shift:
-+    LINK 0;
-+    [--SP] = (R7:4, P5:3);
-+    P3 = R0;
-+    resume sdk_ott_stock_shift, 0x8c0b, 0x28b0
++.extern sdk_ott_dispatch_shift
++.global sdk_ott_shifted_key
++.type sdk_ott_shifted_key, STT_FUNC
++sdk_ott_shifted_key:
++    LINK 12;
++    CALL sdk_ott_dispatch_shift;
++    UNLINK;
++    CC = R0 == 0;
++    RTS;
++.size sdk_ott_shifted_key, .-sdk_ott_shifted_key
 +
 +.global sdk_ott_stock_turn
 +.type sdk_ott_stock_turn, STT_FUNC
@@ -799,10 +803,10 @@ index 0000000..fd7c67e
 +.global sdk_ott_stock_frame
 +.type sdk_ott_stock_frame, STT_FUNC
 +sdk_ott_stock_frame:
-+    LINK 380;
++    LINK 384;
 +    [--SP] = (R7:4, P5:3);
-+    SP += -20;
-+    resume sdk_ott_stock_frame, 0x8d53, 0x9668
++    SP += -32;
++    resume sdk_ott_stock_frame, 0x8d53, 0x6700
 +
 +.global sdk_ott_stock_off_popup
 +.type sdk_ott_stock_off_popup, STT_FUNC
@@ -811,10 +815,10 @@ index 0000000..fd7c67e
 +    resume sdk_ott_stock_off_popup, 0x8d53, 0xa6ac
 diff --git a/sdk/platform/opxy-1.2.1/ott_insert.cpp b/sdk/platform/opxy-1.2.1/ott_insert.cpp
 new file mode 100644
-index 0000000..2dc13aa
+index 0000000..c948d2f
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_insert.cpp
-@@ -0,0 +1,218 @@
+@@ -0,0 +1,227 @@
 +#include "ott_filter/firmware_runtime.hpp"
 +#include "ott_project.hpp"
 +#include "opxy/draw.hpp"
@@ -828,12 +832,11 @@ index 0000000..2dc13aa
 +extern "C" {
 +void sdk_drum_send_begin() __asm__("sdk_drum_send_begin");
 +u32 sdk_ott_stock_buttons(void*, const u32*) __asm__("sdk_ott_stock_buttons");
-+u32 sdk_ott_stock_shift(void*, const u32*) __asm__("sdk_ott_stock_shift");
 +void sdk_ott_stock_turn(void*, u32, const i32*) __asm__("sdk_ott_stock_turn");
 +void sdk_ott_stock_frame(void*, i32) __asm__("sdk_ott_stock_frame");
 +void sdk_ott_stock_off_popup(void*, i32) __asm__("sdk_ott_stock_off_popup");
 +u32 sdk_ott_buttons(void*, const u32*) __asm__("sdk_ott_buttons");
-+u32 sdk_ott_shift(void*, const u32*) __asm__("sdk_ott_shift");
++u32 sdk_ott_dispatch_shift(void*, const u32*) __asm__("sdk_ott_dispatch_shift");
 +void sdk_ott_turn(void*, u32, const i32*) __asm__("sdk_ott_turn");
 +void sdk_ott_frame(void*, i32) __asm__("sdk_ott_frame");
 +void sdk_ott_off_popup(void*, i32) __asm__("sdk_ott_off_popup");
@@ -845,6 +848,7 @@ index 0000000..2dc13aa
 +
 +namespace {
 +constexpr u32 kInstrumentPage = 0x080238bc;
++constexpr u32 kEnvelopePage = 1;
 +constexpr u32 kInstrumentController = 0x8400dff8;
 +constexpr u32 kTrackSum = 0x11903600;
 +ott::DeviceControls controls{};
@@ -866,7 +870,7 @@ index 0000000..2dc13aa
 +
 +u32 select() {
 +    const u32 track = opxy::platform::selected_track();
-+    controls.select(track, opxy::platform::word(kInstrumentPage) == 2 ? ott::Page::filter : ott::Page::other);
++    controls.select(track, opxy::platform::word(kInstrumentPage) == kEnvelopePage ? ott::Page::envelope : ott::Page::other);
 +    return track;
 +}
 +
@@ -875,16 +879,6 @@ index 0000000..2dc13aa
 +    limit_hit = result == ott::InputResult::insert_limit;
 +    if (result == ott::InputResult::settings_changed) publish(track + 1, false);
 +    return true;
-+}
-+
-+u32 buttons(void* controller, const u32* event, bool shifted) {
-+    if (controller && event) {
-+        const u32 track = select();
-+        const u32 key = event[0];
-+        if (key == 8 && !stock<u32()>(0x8d5b7e34)() && handled(controls.m3(shifted), track)) return 1;
-+        if (key >= 10 && key <= 13 && handled(controls.click(key - 10, shifted), track)) return 1;
-+    }
-+    return shifted ? sdk_ott_stock_shift(controller, event) : sdk_ott_stock_buttons(controller, event);
 +}
 +
 +using Display = opxy::draw::Frame<0, 0, 0, 11, 0>;
@@ -963,8 +957,27 @@ index 0000000..2dc13aa
 +}
 +}
 +
-+u32 sdk_ott_buttons(void* controller, const u32* event) { return buttons(controller, event, false); }
-+u32 sdk_ott_shift(void* controller, const u32* event) { return buttons(controller, event, true); }
++u32 sdk_ott_buttons(void* controller, const u32* event) {
++    if (controller && event) {
++        const u32 track = select();
++        const u32 key = event[0];
++        if (key >= 6 && key <= 9 && !stock<u32()>(0x8d5b7e34)() &&
++            handled(controls.module(key - 5, false), track)) return 1;
++        if (key >= 10 && key <= 13 && handled(controls.click(key - 10, false), track)) return 1;
++    }
++    return sdk_ott_stock_buttons(controller, event);
++}
++
++u32 sdk_ott_dispatch_shift(void* controller, const u32* event) {
++    const auto* methods = *static_cast<const u32* const*>(controller);
++    if (reinterpret_cast<u32>(methods) == kInstrumentController && event) {
++        const u32 track = select();
++        const u32 key = event[0];
++        if (key == 13 && handled(controls.click(3, true), track)) return 1;
++        if (key >= 6 && key <= 9) controls.module(key - 5, true);
++    }
++    return stock<u32(void*, const u32*)>(methods[4])(controller, event);
++}
 +
 +void sdk_ott_turn(void* controller, u32 position, const i32* event) {
 +    if (controller && event && position < 8) {
@@ -977,15 +990,15 @@ index 0000000..2dc13aa
 +void sdk_ott_frame(void* frame, i32 elapsed) {
 +    select();
 +    ott::Panel panel{};
-+    if (!instrument_is_top() || !controls.panel(opxy::platform::shift_held(), panel) || !draw_panel(panel))
++    if (!instrument_is_top() || !controls.panel(panel) || !draw_panel(panel))
 +        sdk_ott_stock_frame(frame, elapsed);
 +}
 +
 +void sdk_ott_off_popup(void* frame, i32 elapsed) {
 +    // Stock composites off_popup.svg after the Filter page and dims every
-+    // existing pixel first. It belongs to the stock view, including Shift sends.
-+    if (bound && instrument_is_top() && opxy::platform::word(kInstrumentPage) == 2 &&
-+        controls.page() == ott::Page::ott && !opxy::platform::shift_held())
++    // existing pixel first. It belongs to the stock view. Filter and its sends stay on M3.
++    if (bound && instrument_is_top() && opxy::platform::word(kInstrumentPage) == kEnvelopePage &&
++        controls.page() == ott::Page::ott)
 +        return;
 +    sdk_ott_stock_off_popup(frame, elapsed);
 +}

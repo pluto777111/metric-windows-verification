@@ -126,65 +126,70 @@ void test_device_controls(const Block& input) {
     using ott::InputResult;
     using ott::Page;
     controller.select(0, Page::other);
-    require(controller.m3(false) == InputResult::stock,
-            "The first M3 press belongs to stock");
-    controller.select(0, Page::filter);
-    require(controller.m3(false) == InputResult::page_changed && controller.page() == Page::ott,
-            "M3 on Filter must open OTT");
-    require(controller.panel(false, panel) && !panel.enabled && panel.track_number == 1 &&
+    require(controller.module(2, false) == InputResult::stock,
+            "The first M2 press belongs to stock");
+    controller.select(0, Page::envelope);
+    require(controller.module(2, false) == InputResult::page_changed && controller.page() == Page::ott,
+            "M2 on Envelope must open OTT");
+    require(controller.panel(panel) && !panel.enabled && panel.track_number == 1 &&
             std::strcmp(panel.encoders[3].label, "Mix") == 0, "Main row must show far-right Mix");
     require(controller.click(0, false) == InputResult::page_changed &&
             controller.click(0, false) == InputResult::page_changed &&
-            controller.panel(false, panel) && std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
+            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
             "Clicking encoder one must show Post Cutoff");
     const auto before = controller.project().track[0].controls;
     require(controller.turn(0, false, -8, 1) == InputResult::settings_changed &&
             controller.project().track[0].controls.post_cutoff < before.post_cutoff &&
             controller.project().track[0].controls.character == before.character,
             "Post Cutoff must have independent storage");
-    require(!controller.panel(true, panel) &&
-            controller.turn(0, true, 5, 0) == InputResult::stock &&
+    require(controller.panel(panel) &&
+            controller.turn(0, true, 5, 0) == InputResult::handled &&
             controller.click(1, true) == InputResult::stock,
-            "Shift must hand display, turns, and clicks back to the stock filter");
+            "Shift must leave OTT visible and prevent hidden envelope edits");
     require(controller.click(0, false) == InputResult::page_changed &&
             controller.click(0, false) == InputResult::page_changed &&
             controller.click(3, false) == InputResult::page_changed &&
-            controller.panel(false, panel) && std::strcmp(panel.encoders[0].label, "Upward") == 0 &&
+            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Upward") == 0 &&
             std::strcmp(panel.encoders[1].label, "Low Protect") == 0 &&
             std::strcmp(panel.encoders[3].label, "Output Trim") == 0 && !panel.enabled,
             "A single click must switch only its own encoder without enabling the insert");
     require(controller.turn(0, false, 127, 3) == InputResult::settings_changed &&
             controller.project().track[0].controls.upward == full,
             "Large turns on a secondary parameter must clamp without overflow");
-    require(controller.click(0, false) == InputResult::page_changed && controller.panel(false, panel) &&
+    require(controller.click(0, false) == InputResult::page_changed && controller.panel(panel) &&
             std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
             "Encoder one must cycle to Post Cutoff");
     require(controller.click(3, false) == InputResult::page_changed && !controller.project().track[0].enabled,
             "A single unshifted click on encoder four must leave bypass untouched");
     require(controller.click(3, true) == InputResult::settings_changed,
             "Shift plus encoder four must enable OTT immediately");
-    require(controller.m3(false) == InputResult::page_changed && controller.page() == Page::filter,
-            "M3 on OTT must return to Filter");
+    require(controller.panel(panel) && panel.enabled, "OTT must show ON while Shift is held");
+    require(controller.module(3, false) == InputResult::stock &&
+            controller.click(3, true) == InputResult::stock,
+            "M3 and subsequent Filter shortcuts must belong to stock");
+    require(controller.module(2, false) == InputResult::page_changed, "Reopen OTT from Envelope");
+    require(controller.module(2, false) == InputResult::page_changed && controller.page() == Page::envelope,
+            "M2 on OTT must return to Envelope");
 
     for (unsigned track = 1; track < 5; ++track) {
-        controller.select(track, Page::filter);
-        require(controller.m3(false) == InputResult::page_changed, "Open OTT on the selected track");
+        controller.select(track, Page::envelope);
+        require(controller.module(2, false) == InputResult::page_changed, "Open OTT on the selected track");
         const auto expected = track == 4 ? InputResult::insert_limit : InputResult::settings_changed;
         require(controller.click(3, true) == expected, "The controller must enforce the four-insert cap");
     }
-    require(controller.panel(false, panel) && panel.enabled_count == 4 && !panel.enabled,
+    require(controller.panel(panel) && panel.enabled_count == 4 && !panel.enabled,
             "The fifth track's panel must report four slots in use");
-    require(controller.m3(true) == InputResult::stock && controller.page() == Page::filter,
-            "Shift+M3 must fall through to the stock chooser");
-    controller.select(8, Page::filter);
-    require(controller.m3(false) == InputResult::stock, "Aux tracks must remain stock");
+    require(controller.module(2, true) == InputResult::stock && controller.page() == Page::envelope,
+            "Shift+M2 must fall through to stock");
+    controller.select(8, Page::envelope);
+    require(controller.module(2, false) == InputResult::stock, "Aux tracks must remain stock");
 
     const auto saved = controller.project();
     ott::DeviceControls restored;
     require(restored.load(saved), "A valid project must restore");
-    restored.select(0, Page::filter);
-    restored.m3(false);
-    require(restored.panel(false, panel) && panel.enabled && panel.enabled_count == 4 &&
+    restored.select(0, Page::envelope);
+    restored.module(2, false);
+    require(restored.panel(panel) && panel.enabled && panel.enabled_count == 4 &&
             std::strcmp(panel.encoders[0].label, "Character") == 0,
             "Project activation must restore settings and reset temporary page state");
     ott::TrackInserts audio;

@@ -57,8 +57,8 @@ int main() {
     assert(run_mix(audio, mixer) == mixer);
 
     auto switch_track = [&](u32 track) {
-        ui.select(track, ott::Page::filter);
-        assert(ui.m3(false) == ott::InputResult::page_changed);
+        ui.select(track, ott::Page::envelope);
+        assert(ui.module(2, false) == ott::InputResult::page_changed);
         return ui.click(3, true);
     };
     assert(switch_track(0) == ott::InputResult::settings_changed);
