@@ -1,5 +1,5 @@
 diff --git a/builder/core.mjs b/builder/core.mjs
-index 1defcfb..3167ae4 100644
+index 1defcfb..913c4c1 100644
 --- a/builder/core.mjs
 +++ b/builder/core.mjs
 @@ -10,7 +10,7 @@ export const selectArtwork = Graphics.selectArtwork;
@@ -7,12 +7,12 @@ index 1defcfb..3167ae4 100644
  // (write_builder inlines this same file's content for the offline export).
  import DEFAULT_PRESET_TEMPLATE from '../tooling/default_preset.json' with { type: 'json' };
 -export const PROFILE_SHA256 = '1bad5bdbf79ade17ef46bb0a668787cdb359254329809d888e953e1311b22bd1';
-+export const PROFILE_SHA256 = 'a0d2f53098796af742c390b7754e56066ac5272d20048657a240d3e0ff1c2a9d';
++export const PROFILE_SHA256 = 'c6f79a8d6bcd5cfd0f14c8e8d507a6a3d7a503aab77ddfb66cb97560de709e32';
  export function requireThat(ok, message) { if (!ok) throw new Error(message); }
  const check = requireThat;
  const utf8 = new TextEncoder();
 diff --git a/profiles/opxy-1.2.1.json b/profiles/opxy-1.2.1.json
-index e17c08b..f9f18eb 100644
+index e17c08b..2e27432 100644
 --- a/profiles/opxy-1.2.1.json
 +++ b/profiles/opxy-1.2.1.json
 @@ -140,6 +140,13 @@
@@ -37,7 +37,7 @@ index e17c08b..f9f18eb 100644
        "padMix",
        "drumline_page",
        "trackStage"
-@@ -2419,6 +2427,61 @@
+@@ -2419,6 +2427,72 @@
        "service": "players",
        "call": true
      },
@@ -87,6 +87,17 @@ index e17c08b..f9f18eb 100644
 +    },
 +    {
 +      "kind": "hook",
++      "name": "Filter off popup: leave the separate OTT panel undimmed",
++      "address": "0x8d53a6a8",
++      "file_offset": "0x171904",
++      "length": 4,
++      "before": "00e80400",
++      "symbol": "sdk_ott_off_popup",
++      "call": false,
++      "service": "ott_insert"
++    },
++    {
++      "kind": "hook",
 +      "name": "Instrument mixer: OTT immediately after stock track filter",
 +      "address": "0x8d51242e",
 +      "file_offset": "0x14968a",
@@ -99,7 +110,7 @@ index e17c08b..f9f18eb 100644
      {
        "kind": "hook",
        "name": "MIX button dispatcher: master processor menu",
-@@ -2472,7 +2535,11 @@
+@@ -2472,7 +2546,11 @@
        "before": "fae397eb",
        "symbol": "sdk_master_receive",
        "call": true,
@@ -112,7 +123,7 @@ index e17c08b..f9f18eb 100644
      },
      {
        "kind": "hook",
-@@ -2505,7 +2572,11 @@
+@@ -2505,7 +2583,11 @@
        "before": "ffe3ea5b",
        "symbol": "sdk_master_project",
        "call": true,
@@ -125,7 +136,7 @@ index e17c08b..f9f18eb 100644
      },
      {
        "kind": "hook",
-@@ -2529,6 +2600,7 @@
+@@ -2529,6 +2611,7 @@
        "call": true,
        "service": "track_call",
        "symbols": {
@@ -746,10 +757,10 @@ index 0000000..2e0c707
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_hooks.s b/sdk/platform/opxy-1.2.1/ott_hooks.s
 new file mode 100644
-index 0000000..2bb43e5
+index 0000000..fd7c67e
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_hooks.s
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,47 @@
 +.section .text
 +.align 2
 +
@@ -791,12 +802,18 @@ index 0000000..2bb43e5
 +    [--SP] = (R7:4, P5:3);
 +    SP += -20;
 +    resume sdk_ott_stock_frame, 0x8d53, 0x9668
++
++.global sdk_ott_stock_off_popup
++.type sdk_ott_stock_off_popup, STT_FUNC
++sdk_ott_stock_off_popup:
++    LINK 16;
++    resume sdk_ott_stock_off_popup, 0x8d53, 0xa6ac
 diff --git a/sdk/platform/opxy-1.2.1/ott_insert.cpp b/sdk/platform/opxy-1.2.1/ott_insert.cpp
 new file mode 100644
-index 0000000..f78fd6a
+index 0000000..2dc13aa
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_insert.cpp
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,218 @@
 +#include "ott_filter/firmware_runtime.hpp"
 +#include "ott_project.hpp"
 +#include "opxy/draw.hpp"
@@ -813,10 +830,12 @@ index 0000000..f78fd6a
 +u32 sdk_ott_stock_shift(void*, const u32*) __asm__("sdk_ott_stock_shift");
 +void sdk_ott_stock_turn(void*, u32, const i32*) __asm__("sdk_ott_stock_turn");
 +void sdk_ott_stock_frame(void*, i32) __asm__("sdk_ott_stock_frame");
++void sdk_ott_stock_off_popup(void*, i32) __asm__("sdk_ott_stock_off_popup");
 +u32 sdk_ott_buttons(void*, const u32*) __asm__("sdk_ott_buttons");
 +u32 sdk_ott_shift(void*, const u32*) __asm__("sdk_ott_shift");
 +void sdk_ott_turn(void*, u32, const i32*) __asm__("sdk_ott_turn");
 +void sdk_ott_frame(void*, i32) __asm__("sdk_ott_frame");
++void sdk_ott_off_popup(void*, i32) __asm__("sdk_ott_off_popup");
 +u32 sdk_ott_voices(void*, u32, i32*) __asm__("sdk_ott_voices");
 +void sdk_ott_filter(void*, u32, void*) __asm__("sdk_ott_filter");
 +void sdk_ott_receive(u32, u32, i32) __asm__("sdk_ott_receive");
@@ -825,6 +844,7 @@ index 0000000..f78fd6a
 +
 +namespace {
 +constexpr u32 kInstrumentPage = 0x080238bc;
++constexpr u32 kInstrumentController = 0x8400dff8;
 +constexpr u32 kTrackSum = 0x11903600;
 +ott::DeviceControls controls{};
 +ott::AudioInsert audio{};
@@ -836,6 +856,11 @@ index 0000000..f78fd6a
 +    ott::publish(controls.project(), selection, reset, ++sequence, [](u32 id, i32 value) {
 +        stock<void(u32, i32)>(0x8d4dc84c)(id, value);
 +    });
++}
++
++bool instrument_is_top() {
++    const u32* controller = stock<const u32*()>(0x8c0944b0)();
++    return controller && *controller == kInstrumentController;
 +}
 +
 +u32 select() {
@@ -907,12 +932,12 @@ index 0000000..f78fd6a
 +    }
 +    char title[] = "OTT   TRACK 1";
 +    title[12] = static_cast<char>('0' + panel.track_number);
-+    char status[] = "0/4 ACTIVE   BYPASSED";
++    char status[] = "0/4 ACTIVE  OTT BYPASS";
 +    status[0] = static_cast<char>('0' + panel.enabled_count);
 +    if (panel.enabled) {
-+        status[13] = 'O';
-+        status[14] = 'N';
-+        status[15] = 0;
++        status[16] = 'O';
++        status[17] = 'N';
++        status[18] = 0;
 +    }
 +    line(0, 14, 30, title);
 +    line(1, 14, 59, status);
@@ -951,7 +976,17 @@ index 0000000..f78fd6a
 +void sdk_ott_frame(void* frame, i32 elapsed) {
 +    select();
 +    ott::Panel panel{};
-+    if (!controls.panel(opxy::platform::shift_held(), panel) || !draw_panel(panel)) sdk_ott_stock_frame(frame, elapsed);
++    if (!instrument_is_top() || !controls.panel(opxy::platform::shift_held(), panel) || !draw_panel(panel))
++        sdk_ott_stock_frame(frame, elapsed);
++}
++
++void sdk_ott_off_popup(void* frame, i32 elapsed) {
++    // Stock composites off_popup.svg after the Filter page and dims every
++    // existing pixel first. It belongs to the stock view, including Shift sends.
++    if (bound && instrument_is_top() && opxy::platform::word(kInstrumentPage) == 2 &&
++        controls.page() == ott::Page::ott && !opxy::platform::shift_held())
++        return;
++    sdk_ott_stock_off_popup(frame, elapsed);
 +}
 +
 +u32 sdk_ott_voices(void* manager, u32 track, i32* sum) {
