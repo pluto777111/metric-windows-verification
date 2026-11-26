@@ -1,5 +1,5 @@
 diff --git a/builder/core.mjs b/builder/core.mjs
-index 1defcfb..1ab6df6 100644
+index 1defcfb..24d5170 100644
 --- a/builder/core.mjs
 +++ b/builder/core.mjs
 @@ -10,7 +10,7 @@ export const selectArtwork = Graphics.selectArtwork;
@@ -7,12 +7,12 @@ index 1defcfb..1ab6df6 100644
  // (write_builder inlines this same file's content for the offline export).
  import DEFAULT_PRESET_TEMPLATE from '../tooling/default_preset.json' with { type: 'json' };
 -export const PROFILE_SHA256 = '1bad5bdbf79ade17ef46bb0a668787cdb359254329809d888e953e1311b22bd1';
-+export const PROFILE_SHA256 = 'c11424473570360b62596d58feffa32cbb00333fc49223a1700b2f2921f541c3';
++export const PROFILE_SHA256 = 'e508b7b71dc99aadad6248a86f6c29479ac78e955fb4c1b1fc2084e34813a5e8';
  export function requireThat(ok, message) { if (!ok) throw new Error(message); }
  const check = requireThat;
  const utf8 = new TextEncoder();
 diff --git a/profiles/opxy-1.2.1.json b/profiles/opxy-1.2.1.json
-index e17c08b..2dc25b9 100644
+index e17c08b..c5e3728 100644
 --- a/profiles/opxy-1.2.1.json
 +++ b/profiles/opxy-1.2.1.json
 @@ -140,6 +140,13 @@
@@ -76,12 +76,12 @@ index e17c08b..2dc25b9 100644
 +    },
 +    {
 +      "kind": "hook",
-+      "name": "Instrument Envelope frame: OTT panel",
-+      "address": "0x8d5366f8",
-+      "file_offset": "0x16d954",
++      "name": "Instrument Envelope screen drawing: OTT panel for the selected engine",
++      "address": "0x8d51fe1c",
++      "file_offset": "0x157078",
 +      "length": 8,
-+      "before": "00e86000e305066f",
-+      "symbol": "sdk_ott_frame",
++      "before": "00e80c00eb052832",
++      "symbol": "sdk_ott_draw",
 +      "call": false,
 +      "service": "ott_insert"
 +    },
@@ -759,7 +759,7 @@ index 0000000..2e0c707
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_hooks.s b/sdk/platform/opxy-1.2.1/ott_hooks.s
 new file mode 100644
-index 0000000..f7403ee
+index 0000000..2fda65f
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_hooks.s
 @@ -0,0 +1,50 @@
@@ -800,13 +800,13 @@ index 0000000..f7403ee
 +    SP += -20;
 +    resume sdk_ott_stock_turn, 0x8c0b, 0x12ec
 +
-+.global sdk_ott_stock_frame
-+.type sdk_ott_stock_frame, STT_FUNC
-+sdk_ott_stock_frame:
-+    LINK 384;
-+    [--SP] = (R7:4, P5:3);
-+    SP += -32;
-+    resume sdk_ott_stock_frame, 0x8d53, 0x6700
++.global sdk_ott_stock_draw
++.type sdk_ott_stock_draw, STT_FUNC
++sdk_ott_stock_draw:
++    LINK 48;
++    [--SP] = (R7:5, P5:3);
++    P5 = R0;
++    resume sdk_ott_stock_draw, 0x8d51, 0xfe24
 +
 +.global sdk_ott_stock_off_popup
 +.type sdk_ott_stock_off_popup, STT_FUNC
@@ -815,10 +815,10 @@ index 0000000..f7403ee
 +    resume sdk_ott_stock_off_popup, 0x8d53, 0xa6ac
 diff --git a/sdk/platform/opxy-1.2.1/ott_insert.cpp b/sdk/platform/opxy-1.2.1/ott_insert.cpp
 new file mode 100644
-index 0000000..c948d2f
+index 0000000..75c53bb
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_insert.cpp
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,235 @@
 +#include "ott_filter/firmware_runtime.hpp"
 +#include "ott_project.hpp"
 +#include "opxy/draw.hpp"
@@ -833,12 +833,12 @@ index 0000000..c948d2f
 +void sdk_drum_send_begin() __asm__("sdk_drum_send_begin");
 +u32 sdk_ott_stock_buttons(void*, const u32*) __asm__("sdk_ott_stock_buttons");
 +void sdk_ott_stock_turn(void*, u32, const i32*) __asm__("sdk_ott_stock_turn");
-+void sdk_ott_stock_frame(void*, i32) __asm__("sdk_ott_stock_frame");
++void sdk_ott_stock_draw(Base*, u32) __asm__("sdk_ott_stock_draw");
 +void sdk_ott_stock_off_popup(void*, i32) __asm__("sdk_ott_stock_off_popup");
 +u32 sdk_ott_buttons(void*, const u32*) __asm__("sdk_ott_buttons");
 +u32 sdk_ott_dispatch_shift(void*, const u32*) __asm__("sdk_ott_dispatch_shift");
 +void sdk_ott_turn(void*, u32, const i32*) __asm__("sdk_ott_turn");
-+void sdk_ott_frame(void*, i32) __asm__("sdk_ott_frame");
++void sdk_ott_draw(Base*, u32) __asm__("sdk_ott_draw");
 +void sdk_ott_off_popup(void*, i32) __asm__("sdk_ott_off_popup");
 +u32 sdk_ott_voices(void*, u32, i32*) __asm__("sdk_ott_voices");
 +void sdk_ott_filter(void*, u32, void*) __asm__("sdk_ott_filter");
@@ -952,7 +952,7 @@ index 0000000..c948d2f
 +        line(7 + i, x, 140, value);
 +    }
 +    Renderer::apply(&object, display);
-+    opxy::screen::draw(&object.base);
++    sdk_ott_stock_draw(&object.base, 0);
 +    return true;
 +}
 +}
@@ -987,11 +987,19 @@ index 0000000..c948d2f
 +    sdk_ott_stock_turn(controller, position, event);
 +}
 +
-+void sdk_ott_frame(void* frame, i32 elapsed) {
-+    select();
-+    ott::Panel panel{};
-+    if (!instrument_is_top() || !controls.panel(panel) || !draw_panel(panel))
-+        sdk_ott_stock_frame(frame, elapsed);
++void sdk_ott_draw(Base* screen, u32 flags) {
++    // The instrument selector returns the regular ADSR or dynamics envelope
++    // by engine. It also has special M2 slots for held drum pads and MIDI.
++    if (screen && (screen->page == 24 || screen->page == 25 || screen->page == 9 || screen->page == 11) &&
++        opxy::platform::word(kInstrumentPage) == kEnvelopePage && instrument_is_top()) {
++        const u32 selected_screen = stock<u32()>(0x8c0b1198)();
++        if (screen->page == selected_screen) {
++            select();
++            ott::Panel panel{};
++            if (controls.panel(panel) && draw_panel(panel)) return;
++        }
++    }
++    sdk_ott_stock_draw(screen, flags);
 +}
 +
 +void sdk_ott_off_popup(void* frame, i32 elapsed) {
