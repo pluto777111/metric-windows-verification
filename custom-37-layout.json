@@ -1,0 +1,271 @@
+{
+  "format": "opxy-layout/1",
+  "profile": "opxy-1.2.1",
+  "selected": [
+    "fm2op",
+    "macroosc",
+    "timestretch",
+    "ringmod",
+    "karplus",
+    "drone",
+    "pingpong",
+    "chords",
+    "vibe",
+    "mmdyn",
+    "mmens",
+    "mmpar",
+    "mmpulse",
+    "mmstat",
+    "mmvo6",
+    "scales",
+    "bloom",
+    "hollow",
+    "sand",
+    "recur",
+    "mdkit",
+    "mmsaw",
+    "lint",
+    "chroma",
+    "omnifilter",
+    "daath",
+    "grainfield",
+    "acidrain",
+    "tesla",
+    "halo",
+    "vader",
+    "lustre",
+    "splitter_player",
+    "segin",
+    "neuroform",
+    "earthshine",
+    "comet"
+  ],
+  "extensions": [
+    "capture",
+    "drumline_page"
+  ],
+  "machines": {
+    "fm2op": {
+      "engine": 34,
+      "page": 82
+    },
+    "macroosc": {
+      "engine": 26,
+      "page": 83
+    },
+    "ringmod": {
+      "effect": 1,
+      "page": 21
+    },
+    "timestretch": {
+      "engine": 35,
+      "page": 7
+    },
+    "choir": {
+      "engine": 130,
+      "page": 196
+    },
+    "chords": {
+      "player": 20,
+      "page": 172
+    },
+    "chroma": {
+      "effect": 27,
+      "page": 113
+    },
+    "drone": {
+      "engine": 36,
+      "page": 84
+    },
+    "grainfield": {
+      "effect": 8,
+      "page": 21
+    },
+    "karplus": {
+      "engine": 191,
+      "page": 251
+    },
+    "mdkit": {
+      "engine": 100,
+      "page": 220
+    },
+    "mmdyn": {
+      "engine": 228,
+      "page": 174
+    },
+    "mmpar": {
+      "engine": 158,
+      "page": 224
+    },
+    "mmstat": {
+      "engine": 241,
+      "page": 193
+    },
+    "mmvo6": {
+      "engine": 210,
+      "page": 162
+    },
+    "oldsun": {
+      "engine": 86,
+      "page": 254
+    },
+    "pingpong": {
+      "effect": 39,
+      "page": 21
+    },
+    "acidrain": {
+      "engine": 159,
+      "page": 170
+    },
+    "cirrus": {
+      "engine": 177,
+      "page": 189
+    },
+    "daath": {
+      "engine": 48,
+      "page": 96
+    },
+    "grains": {
+      "engine": 67,
+      "page": 103
+    },
+    "halcyon": {
+      "engine": 97,
+      "page": 217
+    },
+    "hwander": {
+      "engine": 70,
+      "page": 142
+    },
+    "mach": {
+      "engine": 166,
+      "page": 184
+    },
+    "nightdrive": {
+      "engine": 49,
+      "page": 97
+    },
+    "ohmonk": {
+      "engine": 38,
+      "page": 88
+    },
+    "omnifilter": {
+      "engine": 94,
+      "page": 238
+    },
+    "reaction": {
+      "engine": 42,
+      "page": 132
+    },
+    "vader": {
+      "engine": 179,
+      "page": 185
+    },
+    "vibe": {
+      "effect": 24,
+      "page": 21
+    },
+    "bloom": {
+      "engine": 206,
+      "page": 104
+    },
+    "butterfly": {
+      "engine": 46,
+      "page": 118
+    },
+    "fermi": {
+      "engine": 172,
+      "page": 166
+    },
+    "hollow": {
+      "engine": 230,
+      "page": 236
+    },
+    "lustre": {
+      "effect": 56,
+      "page": 21
+    },
+    "matrixy": {
+      "engine": 40,
+      "page": 90
+    },
+    "metal": {
+      "engine": 41,
+      "page": 91
+    },
+    "mmens": {
+      "engine": 189,
+      "page": 171
+    },
+    "mmpulse": {
+      "engine": 62,
+      "page": 110
+    },
+    "mmsaw": {
+      "engine": 50,
+      "page": 216
+    },
+    "orbit": {
+      "engine": 195,
+      "page": 201
+    },
+    "sand": {
+      "engine": 235,
+      "page": 211
+    },
+    "halo": {
+      "effect": 61,
+      "page": 21
+    },
+    "mando": {
+      "engine": 134,
+      "page": 105
+    },
+    "scales": {
+      "player": 22,
+      "page": 143
+    },
+    "x0x": {
+      "engine": 147,
+      "page": 173
+    },
+    "achird": {
+      "engine": 128,
+      "page": 237
+    },
+    "lint": {
+      "effect": 53,
+      "page": 234
+    },
+    "neuroform": {
+      "engine": 126,
+      "page": 156
+    },
+    "recur": {
+      "engine": 106,
+      "page": 214
+    },
+    "segin": {
+      "engine": 243,
+      "page": 165
+    },
+    "comet": {
+      "effect": 11,
+      "page": 252
+    },
+    "earthshine": {
+      "effect": 21,
+      "page": 168
+    },
+    "splitter_player": {
+      "player": 28,
+      "page": 126
+    },
+    "tesla": {
+      "engine": 107,
+      "page": 119
+    }
+  },
+  "memory": "expanded",
+  "reserved_bytes": 4194304
+}

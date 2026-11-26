@@ -1,0 +1,118 @@
+name: METRIC + OTT with the full 37-machine collection
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/metric-ott-37-machines']
+    paths:
+      - '.github/workflows/metric-ott-37.yml'
+      - 'metric-performance/**'
+      - 'metric-layout.json'
+      - 'custom-37-layout.json'
+      - 'derive-expanded-profile.mjs'
+      - 'verify-custom-collection.py'
+      - 'ott-tests/**'
+      - 'sdk-ott-insert.patch'
+      - 'sdk-scaled-pattern-input.patch'
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Authenticate and extract build inputs
+        run: |
+          $archive = Join-Path $PWD 'source.zip'
+          $expected = 'c28f62389d6813b4edb54e6db6141b15b37fde5acf609cdf05b8324ed3aed04f'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) {
+            throw 'Source archive does not match the verified Git LFS object.'
+          }
+          $inputs = Join-Path $env:RUNNER_TEMP 'metric-inputs'
+          python -m zipfile -e $archive $inputs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $stock = Join-Path $inputs 'stock-original-os.ldr'
+          if ((Get-FileHash $stock -Algorithm SHA256).Hash -ne '60358afdaa9b58ed40411602f6d5d4e1e3e02553ff2da7e25038e71dd002b52f') {
+            throw 'Stock OP-XY 1.2.1 image hash mismatch.'
+          }
+      - name: Apply the METRIC input and OTT integration patches
+        run: |
+          Set-Location (Join-Path $env:RUNNER_TEMP 'metric-inputs/open-xy')
+          @'
+          import os
+          from pathlib import Path
+
+          for name in ('sdk-scaled-pattern-input.patch', 'sdk-ott-insert.patch'):
+              original = Path(os.environ['GITHUB_WORKSPACE']) / name
+              normalized = Path(os.environ['RUNNER_TEMP']) / name
+              normalized.write_bytes(original.read_bytes().replace(bytes([13, 10]), bytes([10])))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($name in @('sdk-scaled-pattern-input.patch', 'sdk-ott-insert.patch')) {
+            $patch = Join-Path $env:RUNNER_TEMP $name
+            git -c core.autocrlf=false apply --check $patch
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            git -c core.autocrlf=false apply $patch
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Apply the reviewed 4 MiB memory layout
+        run: |
+          Set-Location (Join-Path $env:RUNNER_TEMP 'metric-inputs/open-xy')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'derive-expanded-profile.mjs') .
+          node derive-expanded-profile.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Authenticate the pinned Blackfin toolchain
+        run: |
+          Set-Location (Join-Path $env:RUNNER_TEMP 'metric-inputs/open-xy')
+          python sdk.py toolchain fetch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python sdk.py doctor --toolchain
+      - name: Build METRIC with OTT and independently verify the package
+        run: |
+          $inputs = Join-Path $env:RUNNER_TEMP 'metric-inputs'
+          $stock = Join-Path $inputs 'stock-original-os.ldr'
+          $output = Join-Path $env:RUNNER_TEMP 'metric-native-baseline'
+          Set-Location (Join-Path $inputs 'open-xy')
+          $env:PYTHONPATH = $PWD.Path
+          $check = Join-Path $env:GITHUB_WORKSPACE 'verify-custom-collection.py'
+          python $check prepare $env:GITHUB_WORKSPACE $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $metric = Join-Path $env:GITHUB_WORKSPACE 'metric-performance'
+          python sdk.py build --collection local/catalog/metric-collection.json --machine $metric --layout local/combined-layout.json --stock-os $stock --profiling on --sweep off --out $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python sdk.py verify --package $output --stock-os $stock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python $check verify $env:GITHUB_WORKSPACE $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash (Join-Path $output 'candidate/os.ldr') -Algorithm SHA256
+      - name: Archive layout and verification reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: metric-ott-37-windows-verification
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/metric-native-baseline/layout.json
+            ${{ runner.temp }}/metric-native-baseline/expanded-layout.json
+            ${{ runner.temp }}/metric-native-baseline/manifest.json
+            ${{ runner.temp }}/metric-native-baseline/verification.json
+            ${{ runner.temp }}/metric-native-baseline/analysis/compile-report.json
+      - name: Archive experimental candidate in the private repository
+        if: ${{ github.event.repository.private }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: metric-ott-37-experimental-candidate
+          if-no-files-found: error
+          path: ${{ runner.temp }}/metric-native-baseline/candidate/
