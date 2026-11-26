@@ -132,7 +132,10 @@ void test_device_controls(const Block& input) {
     require(controller.module(2, false) == InputResult::page_changed && controller.page() == Page::ott,
             "M2 on Envelope must open OTT");
     require(controller.panel(panel) && !panel.enabled && panel.track_number == 1 &&
-            std::strcmp(panel.encoders[3].label, "Mix") == 0, "Main row must show far-right Mix");
+            std::strcmp(panel.encoders[0].label, "Time") == 0 &&
+            std::strcmp(panel.encoders[1].label, "Low") == 0 &&
+            std::strcmp(panel.encoders[2].label, "High") == 0 &&
+            std::strcmp(panel.encoders[3].label, "Depth") == 0, "Show the four main controls");
     require(controller.click(0, false) == InputResult::page_changed &&
             controller.click(0, false) == InputResult::page_changed &&
             controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
@@ -142,35 +145,28 @@ void test_device_controls(const Block& input) {
             controller.project().track[0].controls.post_cutoff < before.post_cutoff &&
             controller.project().track[0].controls.character == before.character,
             "Post Cutoff must have independent storage");
-    require(controller.panel(panel) &&
-            controller.turn(0, true, 5, 0) == InputResult::handled &&
-            controller.click(1, true) == InputResult::stock,
-            "Shift must leave OTT visible and prevent hidden envelope edits");
-    require(controller.click(0, false) == InputResult::page_changed &&
-            controller.click(0, false) == InputResult::page_changed &&
-            controller.click(3, false) == InputResult::page_changed &&
-            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Upward") == 0 &&
-            std::strcmp(panel.encoders[1].label, "Low Protect") == 0 &&
-            std::strcmp(panel.encoders[3].label, "Output Trim") == 0 && !panel.enabled,
-            "A single click must switch only its own encoder without enabling the insert");
-    require(controller.turn(0, false, 127, 3) == InputResult::settings_changed &&
+    require(controller.turn(0, true, 5, 0) == InputResult::handled &&
+            controller.click(3, true) == InputResult::stock,
+            "Shift must stay out of the OTT toggle");
+    require(controller.click(1, false) == InputResult::page_changed &&
+            controller.click(2, false) == InputResult::page_changed &&
+            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0 &&
+            std::strcmp(panel.encoders[1].label, "Upward") == 0 &&
+            std::strcmp(panel.encoders[2].label, "Downward") == 0 && !panel.enabled,
+            "A refinement click must switch only its own encoder");
+    require(controller.turn(1, false, 127, 3) == InputResult::settings_changed &&
             controller.project().track[0].controls.upward == full,
-            "Large turns on a secondary parameter must clamp without overflow");
-    require(controller.click(0, false) == InputResult::page_changed && controller.panel(panel) &&
-            std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
-            "Encoder one must cycle to Post Cutoff");
-    require(controller.click(3, false) == InputResult::page_changed && controller.panel(panel) &&
-            std::strcmp(panel.encoders[3].label, "Enable") == 0 && panel.encoders[3].toggle && !panel.enabled,
-            "The white encoder must reach Enable without changing the insert");
-    require(controller.turn(3, false, 1, 0) == InputResult::settings_changed &&
-            controller.panel(panel) && panel.enabled,
-            "Turn right must enable OTT without Shift");
-    require(controller.turn(3, false, 1, 0) == InputResult::handled &&
-            controller.turn(3, false, -1, 0) == InputResult::settings_changed,
-            "Enable must be directional and repeated turns must leave it on");
-    require(controller.turn(3, false, 1, 0) == InputResult::settings_changed,
-            "Turn right must re-enable OTT");
-    require(controller.panel(panel) && panel.enabled, "OTT must show ON while Shift is held");
+            "Large turns must clamp without overflow");
+    require(controller.turn(3, false, -15, 0) == InputResult::settings_changed &&
+            controller.panel(panel) && !panel.enabled && panel.encoders[3].value < full,
+            "Turning white edits Depth while bypassed");
+    const auto depth = panel.encoders[3].value;
+    for (bool enabled : {true, false, true}) {
+        require(controller.click(3, false) == InputResult::settings_changed &&
+                controller.panel(panel) && panel.enabled == enabled &&
+                std::strcmp(panel.encoders[3].label, "Depth") == 0 && panel.encoders[3].value == depth,
+                "Every unshifted white click toggles bypass and leaves Depth alone");
+    }
     require(controller.module(3, false) == InputResult::stock &&
             controller.click(3, true) == InputResult::stock,
             "M3 and subsequent Filter shortcuts must belong to stock");
@@ -182,9 +178,7 @@ void test_device_controls(const Block& input) {
         controller.select(track, Page::envelope);
         require(controller.module(2, false) == InputResult::page_changed, "Open OTT on the selected track");
         const auto expected = track == 4 ? InputResult::insert_limit : InputResult::settings_changed;
-        require(controller.click(3, false) == InputResult::page_changed &&
-                controller.click(3, false) == InputResult::page_changed &&
-                controller.turn(3, false, 1, 0) == expected, "Enable must enforce the four-insert cap");
+        require(controller.click(3, false) == expected, "Enable must enforce the four-insert cap");
     }
     require(controller.panel(panel) && panel.enabled_count == 4 && !panel.enabled,
             "The fifth track's panel must report four slots in use");
@@ -199,7 +193,7 @@ void test_device_controls(const Block& input) {
     restored.select(0, Page::envelope);
     restored.module(2, false);
     require(restored.panel(panel) && panel.enabled && panel.enabled_count == 4 &&
-            std::strcmp(panel.encoders[0].label, "Character") == 0,
+            std::strcmp(panel.encoders[0].label, "Time") == 0 && panel.encoders[3].value == depth,
             "Project activation must restore settings and reset temporary page state");
     ott::TrackInserts audio;
     require(audio.configure(restored.project().track), "The audio role must accept the restored settings");
@@ -280,6 +274,34 @@ int main() {
     audition.mix = full / 4;
     require(level(7500., .008, audition) > 1.9 * quiet_high,
             "The quiet high-band lift must remain audible at quarter Mix");
+    audition.mix = full;
+    audition.depth = full / 2;
+    const double half_depth = level(7500., .008, audition);
+    audition.depth = 0;
+    require(level(7500., .008, audition) == quiet_high && half_depth > 2 * quiet_high,
+            "Depth must scale the dynamics and leave an exact dry signal at zero with neutral trims");
+    audition.low_trim = full;
+    audition.high_trim = 0;
+    require(level(45., .025, audition) > 3 * level(45., .025, bypass) &&
+            level(10000., .025, audition) < .55 * level(10000., .025, bypass),
+            "Low and High must have independent band trims even at zero Depth");
+    audition.high_trim = full;
+    const double limited = level(10000., .95, audition);
+    require(limited > .5 && limited < .891251,
+            "The enabled insert must limit boosted stereo peaks without collapsing the output");
+    ott::Processor limiter;
+    Block over{};
+    for (unsigned n = 0; n < 24; ++n) {
+        for (unsigned i = 0; i < opxy::block_frames; ++i) {
+            over[2 * i] = i % 2 ? full : -full;
+            over[2 * i + 1] = over[2 * i] / 2;
+        }
+        limiter.process(over.data(), audition);
+        for (unsigned i = 0; i < opxy::block_frames; ++i)
+            require(std::abs(static_cast<double>(over[2 * i])) <= .891250938 * full &&
+                    std::abs(static_cast<double>(over[2 * i]) - 2. * over[2 * i + 1]) < 2048,
+                    "Every processed sample peak must meet the ceiling with linked stereo gain");
+    }
     controls = wet;
     controls.low_protect = full;
     require(level(45., .7, controls) > 1.1 * level(45., .7, wet), "Low Protect must preserve loud bass");

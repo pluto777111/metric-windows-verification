@@ -12,7 +12,7 @@ index 1defcfb..24d5170 100644
  const check = requireThat;
  const utf8 = new TextEncoder();
 diff --git a/profiles/opxy-1.2.1.json b/profiles/opxy-1.2.1.json
-index e17c08b..c5e3728 100644
+index e17c08b..f1fa64e 100644
 --- a/profiles/opxy-1.2.1.json
 +++ b/profiles/opxy-1.2.1.json
 @@ -140,6 +140,13 @@
@@ -54,7 +54,7 @@ index e17c08b..c5e3728 100644
 +    },
 +    {
 +      "kind": "hook",
-+      "name": "Shifted encoder clicks: protect the OTT bypass shortcut",
++      "name": "Shifted module keys: return from OTT to stock",
 +      "address": "0x8c0b5b94",
 +      "file_offset": "0xecdd0",
 +      "length": 8,
@@ -146,31 +146,32 @@ index e17c08b..c5e3728 100644
        }
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter.svg b/sdk/platform/opxy-1.2.1/ott_filter.svg
 new file mode 100644
-index 0000000..baa864a
+index 0000000..55d1953
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter.svg
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,16 @@
 +<svg xmlns="http://www.w3.org/2000/svg" width="480" height="222" viewBox="0 0 480 222">
 +  <path fill="#000000" d="M0 0H480V222H0Z"/>
 +  <path fill="#454545" d="M14 70H466V71H14Z M14 163H466V164H14Z"/>
++  <path fill="#454545" d="M14 131H114V134H14Z M131 131H231V134H131Z M248 131H348V134H248Z M365 131H465V134H365Z"/>
++  <path id="ott_marker1" transform="matrix(1 0 0 1 17 132)" fill="#ECECEC" d="M-2 -7H2V7H-2Z"/>
++  <path id="ott_marker2" transform="matrix(1 0 0 1 134 132)" fill="#ECECEC" d="M-2 -7H2V7H-2Z"/>
++  <path id="ott_marker3" transform="matrix(1 0 0 1 251 132)" fill="#ECECEC" d="M-2 -7H2V7H-2Z"/>
++  <path id="ott_marker4" transform="matrix(1 0 0 1 368 132)" fill="#ECECEC" d="M-2 -7H2V7H-2Z"/>
 +  <text id="ott_title" transform="matrix(1 0 0 1 14 30)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="24px">-</text>
 +  <text id="ott_status" transform="matrix(1 0 0 1 14 59)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="16px">-</text>
 +  <text id="ott_help" transform="matrix(1 0 0 1 14 190)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="16px">-</text>
 +  <text id="ott_label1" transform="matrix(1 0 0 1 14 104)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="14px">-</text>
-+  <text id="ott_value1" transform="matrix(1 0 0 1 14 140)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="26px">-</text>
 +  <text id="ott_label2" transform="matrix(1 0 0 1 131 104)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="14px">-</text>
-+  <text id="ott_value2" transform="matrix(1 0 0 1 131 140)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="26px">-</text>
 +  <text id="ott_label3" transform="matrix(1 0 0 1 248 104)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="14px">-</text>
-+  <text id="ott_value3" transform="matrix(1 0 0 1 248 140)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="26px">-</text>
 +  <text id="ott_label4" transform="matrix(1 0 0 1 365 104)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="14px">-</text>
-+  <text id="ott_value4" transform="matrix(1 0 0 1 365 140)" fill="#ECECEC" font-family="UniversNextPro-Light" font-size="26px">-</text>
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..cefbd70
+index 0000000..3e76635
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,140 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
@@ -187,7 +188,6 @@ index 0000000..cefbd70
 +struct EncoderValue {
 +    const char* label;
 +    i32 value;
-+    bool toggle;
 +};
 +
 +struct Panel {
@@ -223,13 +223,10 @@ index 0000000..cefbd70
 +    }
 +
 +    InputResult click(u32 encoder, bool shifted) {
-+        if (!open_ || encoder >= 4) return InputResult::stock;
-+        if (shifted) {
-+            if (encoder != 3) return InputResult::stock;
-+            return set_enabled(!project_.track[track_].enabled);
-+        }
++        if (!open_ || encoder >= 4 || shifted) return InputResult::stock;
++        if (encoder == 3) return set_enabled(!project_.track[track_].enabled);
 +        auto& position = shown_[track_][encoder];
-+        const u32 count = encoder == 0 || encoder == 3 ? 3 : 2;
++        const u32 count = encoder == 1 ? 3 : 4;
 +        const u32 next = static_cast<u32>(position) + 1;
 +        position = next == count ? 0 : static_cast<opxy::u8>(next);
 +        return InputResult::page_changed;
@@ -239,7 +236,6 @@ index 0000000..cefbd70
 +        if (!open_ || encoder >= 4) return InputResult::stock;
 +        if (shifted) return InputResult::handled;
 +        const Binding param = binding(encoder);
-+        if (!param.value) return detents ? set_enabled(detents > 0) : InputResult::handled;
 +        i32& value = project_.track[track_].controls.*param.value;
 +        const i32 bounded = detents < -127 ? -127 : detents > 127 ? 127 : detents;
 +        const i32 speed = acceleration < 3 ? static_cast<i32>(acceleration + 1) : 4;
@@ -260,7 +256,7 @@ index 0000000..cefbd70
 +        panel.enabled_count = count(project_);
 +        for (u32 i = 0; i < 4; ++i) {
 +            const Binding param = binding(i);
-+            panel.encoders[i] = {param.label, param.value ? settings.controls.*param.value : settings.enabled, !param.value};
++            panel.encoders[i] = {param.label, settings.controls.*param.value};
 +        }
 +        return true;
 +    }
@@ -282,20 +278,16 @@ index 0000000..cefbd70
 +    };
 +
 +    Binding binding(u32 encoder) const {
-+        static constexpr Binding main[] = {
-+            {"Character", &Controls::character}, {"Low Protect", &Controls::low_protect},
-+            {"Time", &Controls::time}, {"Mix", &Controls::mix},
++        static constexpr Binding controls[3][4] = {
++            {{"Time", &Controls::time}, {"Attack", &Controls::attack},
++             {"Post Cutoff", &Controls::post_cutoff}, {"Character", &Controls::character}},
++            {{"Low", &Controls::low_trim}, {"Upward", &Controls::upward},
++             {"Low Protect", &Controls::low_protect}},
++            {{"High", &Controls::high_trim}, {"Downward", &Controls::downward},
++             {"Mix", &Controls::mix}, {"Output Trim", &Controls::trim}},
 +        };
-+        static constexpr Binding secondary[] = {
-+            {"Upward", &Controls::upward}, {"Downward", &Controls::downward},
-+            {"Attack", &Controls::attack}, {"Output Trim", &Controls::trim},
-+        };
-+        const u32 position = shown_[track_][encoder];
-+        if (position == 1) return secondary[encoder];
-+        if (position == 2)
-+            return encoder == 0 ? Binding{"Post Cutoff", &Controls::post_cutoff}
-+                                : Binding{"Enable", nullptr};
-+        return main[encoder];
++        if (encoder == 3) return {"Depth", &Controls::depth};
++        return controls[encoder][shown_[track_][encoder]];
 +    }
 +
 +    InputResult set_enabled(bool enabled) {
@@ -313,7 +305,7 @@ index 0000000..cefbd70
 +    }
 +
 +    ProjectSettings project_;
-+    opxy::u8 shown_[TrackInserts::track_count][4] = {};
++    opxy::u8 shown_[TrackInserts::track_count][3] = {};
 +    u32 track_ = TrackInserts::track_count;
 +    Page stock_page_ = Page::other;
 +    bool open_ = false;
@@ -322,26 +314,33 @@ index 0000000..cefbd70
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
 new file mode 100644
-index 0000000..d35c5d1
+index 0000000..e453700
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,140 @@
 +#pragma once
 +#include "device_controls.hpp"
 +
 +namespace ott {
-+constexpr u32 parameter_count = 9;
++constexpr u32 legacy_parameter_count = 9;
++constexpr u32 parameter_count = 12;
 +constexpr i32 Controls::* parameters[] = {
 +    &Controls::character, &Controls::low_protect, &Controls::time,
 +    &Controls::mix, &Controls::upward, &Controls::downward,
-+    &Controls::attack, &Controls::trim, &Controls::post_cutoff
++    &Controls::attack, &Controls::trim, &Controls::post_cutoff,
++    &Controls::depth, &Controls::low_trim, &Controls::high_trim
 +};
 +constexpr u32 project_bytes = 1 + TrackInserts::track_count * (1 + 4 * parameter_count);
-+constexpr u32 message_id = 128, last_parameter_id = message_id + parameter_count;
++constexpr u32 message_id = 128, last_parameter_id = message_id + legacy_parameter_count;
 +using Byte = unsigned char;
 +
++// Keep the existing DSP message range. The receiver tracks the slot order.
++constexpr u32 parameter_id(u32 slot) {
++    return message_id + 1 + (slot < legacy_parameter_count ? slot : slot - legacy_parameter_count);
++}
++
 +inline u32 encode_project(const ProjectSettings& project, Byte* data) {
-+    data[0] = 1;
++    data[0] = 2;
 +    u32 at = 1;
 +    for (const auto& track : project.track) {
 +        data[at++] = track.enabled;
@@ -354,18 +353,21 @@ index 0000000..d35c5d1
 +}
 +
 +inline bool decode_project(const Byte* data, u32 count, ProjectSettings& project) {
-+    if (count != project_bytes || !data || data[0] != 1) return false;
++    if (!data || !count) return false;
++    const u32 slots = data[0] == 1 ? legacy_parameter_count : parameter_count;
++    if ((data[0] != 1 && data[0] != 2) ||
++        count != 1 + TrackInserts::track_count * (1 + 4 * slots)) return false;
 +    ProjectSettings next{};
 +    u32 at = 1, enabled = 0;
 +    for (auto& track : next.track) {
 +        if (data[at] > 1) return false;
 +        track.enabled = data[at++] != 0;
 +        enabled += track.enabled;
-+        for (const auto parameter : parameters) {
++        for (u32 slot = 0; slot < slots; ++slot) {
 +            u32 value = 0;
 +            for (u32 byte = 0; byte < 4; ++byte) value |= static_cast<u32>(data[at++]) << (8 * byte);
 +            if (value > static_cast<u32>(q31::maximum)) return false;
-+            track.controls.*parameter = static_cast<i32>(value);
++            track.controls.*parameters[slot] = static_cast<i32>(value);
 +        }
 +    }
 +    if (enabled > TrackInserts::insert_limit) return false;
@@ -384,7 +386,7 @@ index 0000000..d35c5d1
 +    send(message_id, static_cast<i32>(sequence << 16 | enable << 8 | selection << 1 | (reset ? 1u : 0u)));
 +    for (u32 index = first; index < end; ++index)
 +        for (u32 slot = 0; slot < parameter_count; ++slot)
-+            send(message_id + 1 + slot, project.track[index].controls.*parameters[slot]);
++            send(parameter_id(slot), project.track[index].controls.*parameters[slot]);
 +    send(message_id, static_cast<i32>(0x80000000u | sequence));
 +}
 +
@@ -407,7 +409,7 @@ index 0000000..d35c5d1
 +            }
 +            reading_ = false;
 +        } else if (reading_) {
-+            if (index_ == end_ || id != message_id + 1 + slot_ || value < 0) {
++            if (index_ == end_ || id != parameter_id(slot_) || value < 0) {
 +                reading_ = false;
 +            } else {
 +                staged_.track[index_].controls.*parameters[slot_] = value;
@@ -458,10 +460,10 @@ index 0000000..d35c5d1
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..ee4da6d
+index 0000000..3477f17
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,290 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
@@ -472,7 +474,7 @@ index 0000000..ee4da6d
 +using opxy::u32;
 +namespace q31 = opxy::q31;
 +
-+// Normalized Q31 encoder values, ordered left to right on each row.
++// Normalized Q31 controls. Keep existing fields stable for project recall.
 +struct Controls {
 +    i32 character = q31::maximum / 2;
 +    i32 low_protect = q31::maximum / 4;
@@ -483,6 +485,9 @@ index 0000000..ee4da6d
 +    i32 attack = q31::maximum / 2;
 +    i32 trim = q31::maximum / 2;
 +    i32 post_cutoff = q31::maximum;
++    i32 depth = q31::maximum;
++    i32 low_trim = q31::maximum / 2;
++    i32 high_trim = q31::maximum / 2;
 +};
 +
 +// One instance per stereo track, zero-initialized or reset on activation.
@@ -505,14 +510,20 @@ index 0000000..ee4da6d
 +        const i32 mix = positive(controls.mix);
 +        if (!mix) return;
 +        const i32 character = positive(controls.character);
-+        const i32 release = 230000000 - q31::multiply(positive(controls.time), 210000000);
-+        const i32 attack = 1900000000 - q31::multiply(positive(controls.attack), 800000000);
++        const i32 time = positive(controls.time);
++        const i32 depth = positive(controls.depth);
++        const i32 release = 230000000 - q31::multiply(time, 210000000);
++        const i32 base_attack = 1900000000 - q31::multiply(positive(controls.attack), 800000000);
++        const i32 attack = q31::subtract(base_attack,
++            q31::multiply(bipolar(time), base_attack / 4));
 +        // One-pole coefficient range of about 1.1 to 4.4 kHz at 44.1 kHz.
 +        const i32 crossover = 320000000 + q31::multiply(character, 664000000);
-+        const i32 brightness = bipolar(character);
-+        const i32 upward = positive(controls.upward);
-+        const i32 downward = positive(controls.downward);
-+        const i32 compensation = depth_trim(upward);
++        const i32 brightness = scale(bipolar(character), depth);
++        const i32 upward = scale(positive(controls.upward), depth);
++        const i32 downward = scale(positive(controls.downward), depth);
++        const i32 compensation = depth_trim(scale(1546188226, depth));
++        const i32 band_trim[] = {band_trim_gain(positive(controls.low_trim)), unity,
++                                 band_trim_gain(positive(controls.high_trim))};
 +        const i32 trim = bipolar(positive(controls.trim));
 +        const i32 output_delta = q31::multiply(trim, trim < 0 ? 627000000 : 886000000);
 +        const i32 cutoff = positive(controls.post_cutoff);
@@ -552,7 +563,7 @@ index 0000000..ee4da6d
 +                                               : release + (release / 2) * static_cast<i32>(band);
 +            follow(envelope_[band], peak[band],
 +                   peak[band] > envelope_[band] ? attack : band_release);
-+            gain[band] = unity + gain_delta_[band];
++            gain[band] = gain_unity + gain_delta_[band];
 +            // The high band normally carries less energy. Offset its knee
 +            // so quiet cymbal, noise and harmonics stay in the lift region.
 +            const i32 detector = band == 2 ? q31::half(envelope_[band]) : envelope_[band];
@@ -566,54 +577,76 @@ index 0000000..ee4da6d
 +                ? q31::multiply(strength, q31::maximum - positive(controls.low_protect))
 +                : strength;
 +            i32 band_gain = unity + q31::multiply(protected_strength, delta);
-+            if (upward) band_gain = q31::multiply(compensation, band_gain);
++            if (upward || downward) band_gain = q31::multiply(compensation, band_gain);
 +            if (band == 2) band_gain = q31::add(band_gain, q31::multiply(band_gain, q31::multiply(brightness, 240000000)));
 +            band_gain = q31::add(band_gain, q31::multiply(band_gain, output_delta));
-+            target[band] = band_gain - unity;
++            // Q26 keeps headroom for the dynamics and the +12 dB band trim.
++            const i32 trim_ceiling = q31::shift_right(band_trim[band], 2);
++            const i32 trimmed_gain = band_trim[band] == unity
++                ? q31::shift_right(band_gain, 2)
++                : q31::multiply(band_gain, band_trim[band]) * 2;
++            target[band] = trimmed_gain - gain_unity;
 +            if (peak[band] > envelope_[band]) {
 +                const i32 current_peak = band == 2 ? q31::half(peak[band]) : peak[band];
 +                const i32 peak_delta = curve(current_peak) - unity;
 +                if (peak_delta <= 0) {
 +                    // Remove upward gain immediately on a transient entering
 +                    // compression. The Attack knob still sets detector speed.
-+                    if (target[band] > 0) target[band] = 0;
-+                    if (gain[band] > unity) gain[band] = unity;
++                    if (target[band] > trim_ceiling - gain_unity)
++                        target[band] = trim_ceiling - gain_unity;
++                    if (gain[band] > trim_ceiling) gain[band] = trim_ceiling;
 +                }
 +            }
-+            step[band] = (target[band] - (gain[band] - unity)) / static_cast<i32>(opxy::block_frames);
++            step[band] = (target[band] - (gain[band] - gain_unity)) / static_cast<i32>(opxy::block_frames);
 +        }
 +
 +        // Seed the two poles from the current wet signal when engaging them.
 +        const bool start_post = post_filter && !post_active_;
 +        post_active_ = post_filter;
++        bool processing = post_filter;
++        for (u32 band = 0; band < 3; ++band)
++            processing = processing || gain[band] != gain_unity || target[band];
++        if (!processing) {
++            for (auto& delta : gain_delta_) delta = 0;
++            return;
++        }
++        u32 output_peak = 0;
 +        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
 +            for (u32 band = 0; band < 3; ++band) gain[band] += step[band];
 +            for (u32 ch = 0; ch < 2; ++ch) {
-+                i32& sample = sum[2 * frame + ch];
-+                // Q28 gains leave room for boost and recombination in Q31.
-+                i32 wet = 0;
++                const u32 index = 2 * frame + ch;
++                opxy::i64 combined = 0;
 +                for (u32 band = 0; band < 3; ++band)
-+                    wet += q31::multiply(split[2 * frame + ch][band], gain[band]);
++                    combined += q31::wide(split[index][band], gain[band]);
++                i32 wet = q31::saturate(combined >> 29); // Q25
 +                if (post_filter) {
 +                    if (start_post && frame == 0) post_first_[ch] = post_second_[ch] = wet;
 +                    const i32 first = follow_post(post_first_[ch], wet, post_coefficient);
 +                    wet = follow_post(post_second_[ch], first, post_coefficient);
 +                }
-+                if (post_filter || gain[0] != unity || gain[1] != unity || gain[2] != unity) {
-+                    if (!fully_wet) {
-+                        const i32 dry_scaled = q31::shift_right(sample, 6);
-+                        wet = dry_scaled + q31::multiply(mix, wet - dry_scaled);
-+                    }
-+                    sample = q31::shift_left(wet, 6);
++                if (!fully_wet) {
++                    const i32 dry_scaled = q31::shift_right(sum[index], 6);
++                    wet = q31::add(dry_scaled, q31::multiply(mix, q31::subtract(wet, dry_scaled)));
 +                }
++                split[index][0] = wet;
++                const u32 magnitude = wet < 0 ? 0u - static_cast<u32>(wet) : static_cast<u32>(wet);
++                if (magnitude > output_peak) output_peak = magnitude;
 +            }
 +        }
++
++        const i32 limit = peak_limit(output_peak);
++        if (limiter_gain_ < limit)
++            limiter_gain_ += (limit - limiter_gain_) / 4 + 1;
++        else limiter_gain_ = limit;
++        for (u32 i = 0; i < 2 * opxy::block_frames; ++i)
++            sum[i] = q31::shift_left(scale(split[i][0], limiter_gain_), 6);
 +
 +        for (u32 band = 0; band < 3; ++band) gain_delta_[band] = target[band];
 +    }
 +
 +private:
 +    static constexpr i32 unity = 1 << 28; // Q28
++    static constexpr i32 gain_unity = 1 << 26;
 +    i32 low_[2] = {};
 +    i32 mid_[2] = {};
 +    i32 post_first_[2] = {};
@@ -621,11 +654,42 @@ index 0000000..ee4da6d
 +    bool post_active_ = false;
 +    i32 envelope_[3] = {};
 +    i32 gain_delta_[3] = {};
++    i32 limiter_gain_ = q31::maximum;
++
++    static i32 scale(i32 value, i32 gain) {
++        return gain == q31::maximum ? value : q31::multiply(value, gain);
++    }
++
++    static i32 peak_limit(u32 peak) {
++        constexpr u32 ceiling = 29905418; // -1 dBFS in Q25
++        if (peak <= ceiling) return q31::maximum;
++        // Divide once for the whole stereo block using shifts. Round down
++        // to guarantee the ceiling. The largest peak magnitude is 2^31.
++        u32 remainder = ceiling, gain = 0;
++        for (u32 bit = 0; bit < 23; ++bit) {
++            remainder <<= 1;
++            gain <<= 1;
++            if (remainder >= peak) {
++                remainder -= peak;
++                ++gain;
++            }
++        }
++        return static_cast<i32>(gain << 8);
++    }
++
++    static i32 band_trim_gain(i32 value) {
++        constexpr i32 gains[] = {67427938, 95244494, 134536424, 190037749, unity,
++                                 379175160, 535599149, 756553907, 1068660799};
++        if (value == q31::maximum / 2) return unity;
++        const u32 segment = static_cast<u32>(value) >> 28;
++        const i32 fraction = (value & ((1 << 28) - 1)) * 8;
++        return gains[segment] + q31::multiply(fraction, gains[segment + 1] - gains[segment]);
++    }
 +
 +    static i32 follow_post(i32& state, i32 input, i32 coefficient) {
 +        // Snap only on silence so ordinary low-level stereo detail remains linear.
 +        if (!input && state > -32 && state < 32) state = 0;
-+        else state += q31::multiply(coefficient, input - state);
++        else state += q31::multiply(coefficient, q31::subtract(input, state));
 +        return state;
 +    }
 +
@@ -828,10 +892,10 @@ index 0000000..2fda65f
 +    resume sdk_ott_stock_off_popup, 0x8d53, 0xa6ac
 diff --git a/sdk/platform/opxy-1.2.1/ott_insert.cpp b/sdk/platform/opxy-1.2.1/ott_insert.cpp
 new file mode 100644
-index 0000000..aba69f0
+index 0000000..9dd3486
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_insert.cpp
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,231 @@
 +#include "ott_filter/firmware_runtime.hpp"
 +#include "ott_project.hpp"
 +#include "opxy/draw.hpp"
@@ -894,15 +958,16 @@ index 0000000..aba69f0
 +    return true;
 +}
 +
-+using Display = opxy::draw::Frame<0, 0, 0, 11, 0>;
++using Display = opxy::draw::Frame<0, 0, 4, 7, 1>;
 +using Renderer = RetainedDrawing<Display>;
 +using Object = Renderer::Object;
 +Object object{};
 +Display display{};
 +bool constructed, bound;
 +const char* const ids[] = {
++    "ott_marker1", "ott_marker2", "ott_marker3", "ott_marker4",
 +    "ott_title", "ott_status", "ott_help", "ott_label1", "ott_label2", "ott_label3", "ott_label4",
-+    "ott_value1", "ott_value2", "ott_value3", "ott_value4"
++    "ott_marker1"
 +};
 +
 +void bind(Object* o) {
@@ -949,24 +1014,13 @@ index 0000000..aba69f0
 +    }
 +    line(0, 14, 30, title);
 +    line(1, 14, 59, status);
-+    line(2, 14, 190, limit_hit ? "Four-track limit" : "E4: Mix / Trim / Enable");
++    line(2, 14, 190, limit_hit ? "Four-track limit" : "Click White: On/Off");
 +    for (u32 i = 0; i < 4; ++i) {
 +        const i32 x = 14 + static_cast<i32>(i) * 117;
-+        if (panel.encoders[i].toggle) {
-+            line(7 + i, x, 140, panel.enabled ? "ON" : "OFF");
-+            continue;
-+        }
-+        const u32 percent = (static_cast<u32>(panel.encoders[i].value) / (ott::q31::maximum / 100));
-+        char value[] = "100%";
-+        if (percent < 100) {
-+            const u32 length = percent >= 10 ? 2 : 1;
-+            if (length == 2) value[0] = static_cast<char>('0' + percent / 10);
-+            value[length - 1] = static_cast<char>('0' + percent % 10);
-+            value[length] = '%';
-+            value[length + 1] = 0;
-+        }
 +        line(3 + i, x, 104, panel.encoders[i].label);
-+        line(7 + i, x, 140, value);
++        const i32 offset = ((panel.encoders[i].value >> 24) * 95) >> 7;
++        opxy::draw::place(display, i, (x + 3 + offset) * 1024, 132 * 1024,
++                          1024, 0, opxy::draw::keep);
 +    }
 +    Renderer::apply(&object, display);
 +    sdk_ott_stock_draw(&object.base, 0);
@@ -980,7 +1034,8 @@ index 0000000..aba69f0
 +        const u32 key = event[0];
 +        if (key >= 6 && key <= 9 && !stock<u32()>(0x8d5b7e34)() &&
 +            handled(controls.module(key - 5, false), track)) return 1;
-+        if (key >= 10 && key <= 13 && handled(controls.click(key - 10, false), track)) return 1;
++        if (key >= 10 && key <= 13 &&
++            handled(controls.click(key - 10, opxy::platform::shift_held()), track)) return 1;
 +    }
 +    return sdk_ott_stock_buttons(controller, event);
 +}
@@ -988,10 +1043,11 @@ index 0000000..aba69f0
 +u32 sdk_ott_dispatch_shift(void* controller, const u32* event) {
 +    const auto* methods = *static_cast<const u32* const*>(controller);
 +    if (reinterpret_cast<u32>(methods) == kInstrumentController && event) {
-+        const u32 track = select();
 +        const u32 key = event[0];
-+        if (key == 13 && handled(controls.click(3, true), track)) return 1;
-+        if (key >= 6 && key <= 9) controls.module(key - 5, true);
++        if (key >= 6 && key <= 9) {
++            select();
++            controls.module(key - 5, true);
++        }
 +    }
 +    return stock<u32(void*, const u32*)>(methods[4])(controller, event);
 +}

@@ -59,14 +59,15 @@ int main() {
     auto switch_track = [&](u32 track) {
         ui.select(track, ott::Page::envelope);
         assert(ui.module(2, false) == ott::InputResult::page_changed);
-        assert(ui.click(3, false) == ott::InputResult::page_changed);
-        assert(ui.click(3, false) == ott::InputResult::page_changed);
-        return ui.turn(3, false, 1, 0);
+        return ui.click(3, false);
     };
     assert(switch_track(0) == ott::InputResult::settings_changed);
     assert(ui.click(0, false) == ott::InputResult::page_changed);
     assert(ui.click(0, false) == ott::InputResult::page_changed);
     assert(ui.turn(0, false, -24, 0) == ott::InputResult::settings_changed);
+    assert(ui.turn(3, false, -10, 0) == ott::InputResult::settings_changed);
+    assert(ui.turn(1, false, 5, 0) == ott::InputResult::settings_changed);
+    assert(ui.turn(2, false, 10, 0) == ott::InputResult::settings_changed);
     ott::publish(ui.project(), 1, false, 2, send);
     auto one = run_mix(audio, mixer);
     assert(one[0] != mixer[0]);
@@ -84,6 +85,18 @@ int main() {
     assert(ott::encode_project(ui.project(), bytes) == sizeof bytes);
     ott::ProjectSettings restored{};
     assert(ott::decode_project(bytes, sizeof bytes, restored));
+    constexpr u32 old_stride = 1 + 4 * ott::legacy_parameter_count;
+    ott::Byte legacy[1 + ott::TrackInserts::track_count * old_stride] = {1};
+    for (u32 track = 0; track < ott::TrackInserts::track_count; ++track)
+        std::memcpy(legacy + 1 + track * old_stride,
+                    bytes + 1 + track * (1 + 4 * ott::parameter_count), old_stride);
+    ott::ProjectSettings migrated{};
+    assert(ott::decode_project(legacy, sizeof legacy, migrated));
+    assert(migrated.track[0].enabled &&
+           migrated.track[0].controls.post_cutoff == restored.track[0].controls.post_cutoff &&
+           migrated.track[0].controls.depth == ott::Controls{}.depth &&
+           migrated.track[0].controls.low_trim == ott::Controls{}.low_trim &&
+           migrated.track[0].controls.high_trim == ott::Controls{}.high_trim);
     auto corrupt = restored;
     corrupt.track[4].enabled = true;
     ott::encode_project(corrupt, roundtrip);
