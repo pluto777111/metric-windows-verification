@@ -12,7 +12,7 @@ index 1defcfb..24d5170 100644
  const check = requireThat;
  const utf8 = new TextEncoder();
 diff --git a/profiles/opxy-1.2.1.json b/profiles/opxy-1.2.1.json
-index e17c08b..f1fa64e 100644
+index e17c08b..c5e3728 100644
 --- a/profiles/opxy-1.2.1.json
 +++ b/profiles/opxy-1.2.1.json
 @@ -140,6 +140,13 @@
@@ -54,7 +54,7 @@ index e17c08b..f1fa64e 100644
 +    },
 +    {
 +      "kind": "hook",
-+      "name": "Shifted module keys: return from OTT to stock",
++      "name": "Shifted encoder clicks: protect the OTT bypass shortcut",
 +      "address": "0x8c0b5b94",
 +      "file_offset": "0xecdd0",
 +      "length": 8,
