@@ -272,6 +272,14 @@ int main() {
         require(level(hz, .008, wet) > 1.4 * level(hz, .008, dry), "Quiet band must be boosted");
         require(level(hz, .7, wet) < .9 * level(hz, .7, dry), "Loud band must be attenuated");
     }
+    ott::Controls audition, bypass;
+    bypass.mix = 0;
+    const double quiet_high = level(7500., .008, bypass);
+    require(level(7500., .008, audition) > 4.75 * quiet_high,
+            "The default full Mix must lift sustained quiet highs by at least 13.5 dB");
+    audition.mix = full / 4;
+    require(level(7500., .008, audition) > 1.9 * quiet_high,
+            "The quiet high-band lift must remain audible at quarter Mix");
     controls = wet;
     controls.low_protect = full;
     require(level(45., .7, controls) > 1.1 * level(45., .7, wet), "Low Protect must preserve loud bass");

@@ -458,10 +458,10 @@ index 0000000..d35c5d1
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..e564f23
+index 0000000..ee4da6d
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,228 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
@@ -548,22 +548,27 @@ index 0000000..e564f23
 +        for (u32 band = 0; band < 3; ++band) {
 +            // Use this block's detector so the previous quiet block's upward
 +            // gain cannot be carried into a loud hit.
-+            const i32 band_release = release + (release / 2) * static_cast<i32>(band);
++            const i32 band_release = band == 2 ? release * 2 + release / 2
++                                               : release + (release / 2) * static_cast<i32>(band);
 +            follow(envelope_[band], peak[band],
 +                   peak[band] > envelope_[band] ? attack : band_release);
 +            gain[band] = unity + gain_delta_[band];
 +            // The high band normally carries less energy. Offset its knee
 +            // so quiet cymbal, noise and harmonics stay in the lift region.
 +            const i32 detector = band == 2 ? q31::half(envelope_[band]) : envelope_[band];
-+            const i32 delta = curve(detector) - unity;
++            i32 delta = curve(detector) - unity;
++            // Give quiet highs extra upward gain. Leave the high-band
++            // downward curve in place so loud hats still compress.
++            if (band == 2 && delta > 0)
++                delta += q31::multiply(delta, 1342177280); // +62.5% of the boost
 +            const i32 strength = delta > 0 ? upward : downward;
 +            const i32 protected_strength = band == 0
 +                ? q31::multiply(strength, q31::maximum - positive(controls.low_protect))
 +                : strength;
 +            i32 band_gain = unity + q31::multiply(protected_strength, delta);
 +            if (upward) band_gain = q31::multiply(compensation, band_gain);
-+            if (band == 2) band_gain += q31::multiply(band_gain, q31::multiply(brightness, 240000000));
-+            band_gain += q31::multiply(band_gain, output_delta);
++            if (band == 2) band_gain = q31::add(band_gain, q31::multiply(band_gain, q31::multiply(brightness, 240000000)));
++            band_gain = q31::add(band_gain, q31::multiply(band_gain, output_delta));
 +            target[band] = band_gain - unity;
 +            if (peak[band] > envelope_[band]) {
 +                const i32 current_peak = band == 2 ? q31::half(peak[band]) : peak[band];
