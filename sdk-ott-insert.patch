@@ -167,10 +167,10 @@ index 0000000..baa864a
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..dff26ca
+index 0000000..b2b9519
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,140 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
@@ -233,7 +233,8 @@ index 0000000..dff26ca
 +        }
 +        auto& position = shown_[track_][encoder];
 +        const u32 count = encoder == 0 ? 3 : 2;
-+        position = position + 1 == count ? 0 : position + 1;
++        const u32 next = static_cast<u32>(position) + 1;
++        position = next == count ? 0 : static_cast<opxy::u8>(next);
 +        return InputResult::page_changed;
 +    }
 +
