@@ -91,6 +91,15 @@ int main() {
     assert(!ott::decode_project(legacy_v1, sizeof legacy_v1, defaults));
     assert(!ott::decode_project(legacy_v2, sizeof legacy_v2, defaults));
     assert(!defaults.track[0].enabled && defaults.track[0].controls.depth == ott::q31::maximum);
+    std::memcpy(roundtrip, bytes, sizeof bytes);
+    roundtrip[0] = 3;
+    ott::ProjectSettings migrated{};
+    assert(ott::decode_project(roundtrip, sizeof roundtrip, migrated));
+    assert(migrated.track[0].enabled == restored.track[0].enabled &&
+           migrated.track[0].controls.depth == restored.track[0].controls.depth &&
+           migrated.track[0].controls.high_trim == restored.track[0].controls.high_trim &&
+           migrated.track[0].controls.level_match == ott::q31::maximum &&
+           restored.track[0].controls.level_match == 0);
     auto corrupt = restored;
     corrupt.track[4].enabled = true;
     ott::encode_project(corrupt, roundtrip);

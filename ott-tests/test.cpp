@@ -54,7 +54,7 @@ void test_track_inserts(const Block& input) {
     settings[0].controls.time = full;
     settings[0].controls.upward = full;
     settings[0].controls.downward = full;
-    settings[0].controls.high_trim = full / 2;
+    settings[0].controls.level_match = 0;
     configure();
     Block track_zero, track_seven, silence{};
 
@@ -137,19 +137,19 @@ void test_device_controls(const Block& input) {
             std::strcmp(panel.encoders[2].label, "High") == 0 &&
             std::strcmp(panel.encoders[3].label, "Depth") == 0, "Show the four main controls");
     require(controller.click(0, false) == InputResult::page_changed &&
-            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Output Trim") == 0,
-            "Clicking encoder one must show Output Trim");
+            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Level Match") == 0,
+            "Clicking encoder one must show Level Match");
     const auto before = controller.project().track[0].controls;
     require(controller.turn(0, false, -8, 1) == InputResult::settings_changed &&
-            controller.project().track[0].controls.output_trim < before.output_trim &&
+            controller.project().track[0].controls.level_match < before.level_match &&
             controller.project().track[0].controls.time == before.time,
-            "Output Trim must have independent storage");
+            "Level Match must have independent storage");
     require(controller.turn(0, true, 5, 0) == InputResult::handled &&
             controller.click(3, true) == InputResult::stock,
             "Shift must stay out of the OTT toggle");
     require(controller.click(1, false) == InputResult::page_changed &&
             controller.click(2, false) == InputResult::page_changed &&
-            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Output Trim") == 0 &&
+            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Level Match") == 0 &&
             std::strcmp(panel.encoders[1].label, "Upward") == 0 &&
             std::strcmp(panel.encoders[2].label, "Downward") == 0 && !panel.enabled,
             "A refinement click must switch only its own encoder");
@@ -209,7 +209,8 @@ void test_device_controls(const Block& input) {
 void test_limiter() {
     ott::Processor processor;
     ott::Controls controls;
-    controls.low_trim = controls.high_trim = controls.output_trim = full;
+    controls.low_trim = controls.high_trim = full;
+    controls.level_match = 0;
     bool reached_ceiling = false;
     for (unsigned block = 0; block < 140; ++block) {
         Block input{};
@@ -231,6 +232,48 @@ void test_limiter() {
     require(reached_ceiling, "The limiter test must actually hit the ceiling");
 }
 
+void test_level_match(double hz, double amplitude, bool pulses, const ott::Controls& auto_controls) {
+    ott::Processor matched, uncorrected;
+    auto manual = auto_controls;
+    manual.level_match = 0;
+    double dry_energy = 0, wet_energy = 0, off_energy = 0;
+    for (unsigned block = 0; block < 4096; ++block) {
+        Block dry{};
+        for (unsigned frame = 0; frame < opxy::block_frames; ++frame) {
+            const double t = (block * opxy::block_frames + frame) / 44100.;
+            const double phase = 6.283185307179586 * t;
+            const double amp = pulses ? (block % 512 < 300 ? amplitude : 0) : amplitude;
+            dry[2 * frame] = static_cast<opxy::i32>(full * amp *
+                (.75 * std::sin(hz * phase) + .20 * std::sin(6800 * phase)));
+            dry[2 * frame + 1] = static_cast<opxy::i32>(full * amp *
+                (.65 * std::sin(hz * phase + .4) + .20 * std::sin(3700 * phase)));
+        }
+        auto wet = dry;
+        auto off = dry;
+        matched.process(wet.data(), auto_controls);
+        uncorrected.process(off.data(), manual);
+        if (block >= 3072) {
+            for (unsigned i = 0; i < dry.size(); ++i) {
+                dry_energy += double(dry[i]) * double(dry[i]);
+                wet_energy += double(wet[i]) * double(wet[i]);
+                off_energy += double(off[i]) * double(off[i]);
+            }
+        }
+        if (pulses && block % 512 == 511) {
+            require(matched.settled(), "Silence must stop keeping the track awake");
+            matched.reset_signal();
+            uncorrected.reset();
+        }
+    }
+    const auto error = 10 * std::log10(wet_energy / dry_energy);
+    const auto off_error = 10 * std::log10(off_energy / dry_energy);
+    std::cout << "Level Match " << hz << " Hz: " << error
+              << " dB from input, " << off_error << " dB with matching off\n";
+    const double expected = off_error - std::max(-12., std::min(12., off_error));
+    require(std::abs(error - expected) < .5 && std::abs(off_error) > 1.,
+            "Auto must match input level up to the 12 dB correction limit");
+}
+
 int main() {
     ott::Processor processor;
     Block input, output;
@@ -250,7 +293,7 @@ int main() {
         controls.upward = n & 8 ? full : 0;
         controls.downward = n & 16 ? full : 0;
         controls.low_trim = controls.mid_trim = controls.high_trim = n & 32 ? full : 0;
-        controls.output_trim = n & 64 ? full : 0;
+        controls.level_match = n & 64 ? full : 0;
         processor.process(output.data(), controls);
         for (const auto sample : output)
             require(std::abs(static_cast<double>(sample)) <= .891250938 * full,
@@ -264,6 +307,7 @@ int main() {
 
     ott::Controls neutral, wet;
     neutral.depth = 0;
+    neutral.level_match = wet.level_match = 0;
     require(level(7500., .0008, wet) > 4 * level(7500., .0008, neutral),
             "Full Depth must lift quiet highs");
     require(level(7500., .7, wet) < .9 * level(7500., .7, neutral),
@@ -274,6 +318,13 @@ int main() {
     require(level(22., .025, trims) > 3.5 * level(22., .025, neutral) &&
             level(10000., .025, trims) < .4 * level(10000., .025, neutral),
             "Low and High must have independent band trims even at zero Depth");
+    ott::Controls auto_controls;
+    test_level_match(660., .012, false, auto_controls);
+    test_level_match(180., .25, false, auto_controls);
+    test_level_match(180., .72, false, auto_controls);
+    auto_controls.depth = full / 4;
+    auto_controls.low_trim = (full / 5) * 4;
+    test_level_match(34., .025, true, auto_controls);
     test_limiter();
     test_track_inserts(input);
     test_device_controls(input);

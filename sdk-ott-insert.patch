@@ -168,10 +168,10 @@ index 0000000..55d1953
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..16e8fa2
+index 0000000..f7780f0
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,144 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
@@ -237,6 +237,13 @@ index 0000000..16e8fa2
 +        if (shifted) return InputResult::handled;
 +        const Binding param = binding(encoder);
 +        i32& value = project_.track[track_].controls.*param.value;
++        if (param.value == &Controls::level_match) {
++            if (!detents) return InputResult::handled;
++            const i32 next = detents > 0 ? q31::maximum : 0;
++            if (value == next) return InputResult::handled;
++            value = next;
++            return InputResult::settings_changed;
++        }
 +        const i32 bounded = detents < -127 ? -127 : detents > 127 ? 127 : detents;
 +        const i32 speed = acceleration < 3 ? static_cast<i32>(acceleration + 1) : 4;
 +        // The offset can exceed one Q31 word for accelerated turns.
@@ -279,7 +286,7 @@ index 0000000..16e8fa2
 +
 +    Binding binding(u32 encoder) const {
 +        static constexpr Binding controls[3][3] = {
-+            {{"Time", &Controls::time}, {"Output Trim", &Controls::output_trim}},
++            {{"Time", &Controls::time}, {"Level Match", &Controls::level_match}},
 +            {{"Low", &Controls::low_trim}, {"Upward", &Controls::upward}},
 +            {{"High", &Controls::high_trim}, {"Downward", &Controls::downward}, {"Mid Trim", &Controls::mid_trim}},
 +        };
@@ -385,17 +392,17 @@ index 0000000..d765147
 +}}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
 new file mode 100644
-index 0000000..67545cc
+index 0000000..fbfd246
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,136 @@
 +#pragma once
 +#include "device_controls.hpp"
 +
 +namespace ott {
 +constexpr i32 Controls::* parameters[] = {
 +    &Controls::depth, &Controls::time, &Controls::low_trim, &Controls::high_trim,
-+    &Controls::upward, &Controls::downward, &Controls::mid_trim, &Controls::output_trim
++    &Controls::upward, &Controls::downward, &Controls::mid_trim, &Controls::level_match
 +};
 +constexpr u32 parameter_count = sizeof(parameters) / sizeof(parameters[0]);
 +constexpr u32 project_bytes = 1 + TrackInserts::track_count * (1 + 4 * parameter_count);
@@ -403,7 +410,7 @@ index 0000000..67545cc
 +using Byte = unsigned char;
 +
 +inline u32 encode_project(const ProjectSettings& project, Byte* data) {
-+    data[0] = 3;
++    data[0] = 4;
 +    u32 at = 1;
 +    for (const auto& track : project.track) {
 +        data[at++] = track.enabled;
@@ -418,7 +425,8 @@ index 0000000..67545cc
 +inline bool decode_project(const Byte* data, u32 count, ProjectSettings& project) {
 +    // The earlier compressor used different parameters. Opening those
 +    // projects starts OTT bypassed at the Faust defaults.
-+    if (!data || count != project_bytes || data[0] != 3) return false;
++    if (!data || count != project_bytes || (data[0] != 3 && data[0] != 4)) return false;
++    const bool manual_trim = data[0] == 3;
 +    ProjectSettings next{};
 +    u32 at = 1, enabled = 0;
 +    for (auto& track : next.track) {
@@ -429,6 +437,10 @@ index 0000000..67545cc
 +            u32 value = 0;
 +            for (u32 byte = 0; byte < 4; ++byte) value |= static_cast<u32>(data[at++]) << (8 * byte);
 +            if (value > static_cast<u32>(q31::maximum)) return false;
++            if (parameter == &Controls::level_match) {
++                if (manual_trim) continue;
++                if (value && value != static_cast<u32>(q31::maximum)) return false;
++            }
 +            track.controls.*parameter = static_cast<i32>(value);
 +        }
 +    }
@@ -522,10 +534,10 @@ index 0000000..67545cc
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..6bc55fe
+index 0000000..e403c10
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,314 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
@@ -550,7 +562,7 @@ index 0000000..6bc55fe
 +    i32 upward = q31::maximum / 2;
 +    i32 downward = q31::maximum / 2;
 +    i32 mid_trim = q31::maximum / 2;
-+    i32 output_trim = q31::maximum / 2;
++    i32 level_match = q31::maximum;
 +};
 +
 +class Processor {
@@ -613,11 +625,21 @@ index 0000000..6bc55fe
 +
 +public:
 +    void reset() { *this = Processor{}; }
++    void reset_signal() {
++        const i32 correction = match_db_;
++        reset();
++        match_db_ = correction;
++    }
 +    bool settled() const { return silent_blocks_ >= tail_blocks; }
 +
 +    void process(i32* sum, const Controls& controls) {
++        const bool matching = controls.level_match != 0;
 +        bool silent = true;
-+        for (u32 i = 0; i < 2 * opxy::block_frames; ++i) silent = silent && sum[i] == 0;
++        i64 dry_power = 0;
++        for (u32 i = 0; i < 2 * opxy::block_frames; ++i) {
++            silent = silent && sum[i] == 0;
++            if (matching) dry_power += meter_square(sum[i] >> 16);
++        }
 +        if (!silent) silent_blocks_ = 0;
 +        else if (++silent_blocks_ >= tail_blocks) {
 +            for (u32 i = 0; i < 2 * opxy::block_frames; ++i) sum[i] = 0;
@@ -631,7 +653,7 @@ index 0000000..6bc55fe
 +            {-3108982,-2732058,2215,32768,1938935,131072,48980,921698,2350907,-1700659,
 +             120875,-80428,25090,63757,3787,-2008,9836,faust_tables::release_high_q22},
 +        };
-+        const i32 added_db = trim_db(controls.output_trim) - q31::multiply(controls.depth, 6 * db_unit);
++        const i32 added_db = match_db_ - q31::multiply(controls.depth, 6 * db_unit);
 +        const i32 trims[] = {trim_db(controls.low_trim) + added_db, trim_db(controls.mid_trim) + added_db,
 +                             trim_db(controls.high_trim) + added_db};
 +        i32 rise[3], fall[3], fixed_db[3], release[3];
@@ -647,6 +669,9 @@ index 0000000..6bc55fe
 +        }
 +
 +        i64 peak = 0;
++        i64 wet_power = 0;
++        // Ignore blocks below approximately -60 dBFS RMS, including tails.
++        const bool meter_active = matching && dry_power >= 138000;
 +        i64 output[2 * opxy::block_frames];
 +        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
 +            i32 stereo[2][3];
@@ -679,11 +704,13 @@ index 0000000..6bc55fe
 +            for (u32 ch = 0; ch < 2; ++ch) {
 +                const i64 sample = wet[ch];
 +                output[2 * frame + ch] = sample;
++                if (meter_active) wet_power += meter_square(sample >> 10);
 +                const i64 magnitude = sample < 0 ? -sample : sample;
 +                if (magnitude > peak) peak = magnitude;
 +            }
 +        }
 +        initialized_ = true;
++        update_level_match(matching, meter_active, dry_power, wet_power);
 +        const i32 limit = peak_limit(peak);
 +        if (limiter_ < limit) limiter_ += (limit - limiter_) / 4 + 1;
 +        else limiter_ = limit;
@@ -699,6 +726,40 @@ index 0000000..6bc55fe
 +    u32 silent_blocks_ = 0;
 +    bool initialized_ = false;
 +    i32 limiter_ = q31::maximum;
++    i32 match_db_ = 0;
++    u32 metered_blocks_ = 0;
++    i64 dry_meter_ = 0, wet_meter_ = 0;
++
++    static i64 meter_square(i64 sample) {
++        constexpr i32 bound = 8 << 15;
++        const i32 value = sample > bound ? bound : sample < -bound ? -bound : static_cast<i32>(sample);
++        return q31::wide(value, value);
++    }
++
++    void update_level_match(bool matching, bool active, i64 dry, i64 wet) {
++        if (!matching) {
++            metered_blocks_ = 0;
++            dry_meter_ = wet_meter_ = 0;
++            // Ramp back to the uncorrected Faust gain without an audible jump.
++            match_db_ += max(-1024, min(1024, -match_db_));
++            return;
++        }
++        if (!active) return;
++        dry_meter_ += dry;
++        wet_meter_ += wet;
++        if (++metered_blocks_ < 16) return;
++        if (wet_meter_) {
++            // The reference and processed energy have the same units, so
++            // their dB difference needs no calibration for meter window size.
++            // Reuse the band gain stages for correction before the limiter.
++            constexpr i32 max_step = db_unit / 8;
++            const i32 error = level_db(dry_meter_) - level_db(wet_meter_);
++            const i32 step = max(-max_step, min(max_step, error / 12));
++            match_db_ = max(-12 * db_unit, min(12 * db_unit, match_db_ + step));
++        }
++        metered_blocks_ = 0;
++        dry_meter_ = wet_meter_ = 0;
++    }
 +
 +    static i32 min(i32 a, i32 b) { return a < b ? a : b; }
 +    static i32 max(i32 a, i32 b) { return a > b ? a : b; }
@@ -793,10 +854,10 @@ index 0000000..6bc55fe
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp b/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp
 new file mode 100644
-index 0000000..1d5a6f9
+index 0000000..1d8b432
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,82 @@
 +#pragma once
 +
 +#include "ott.hpp"
@@ -825,15 +886,17 @@ index 0000000..1d5a6f9
 +        if (enabled > insert_limit) return false;
 +        for (u32 index = 0; index < track_count; ++index) {
 +            auto& track = tracks_[index];
++            if (track.settings.enabled && (!settings[index].enabled ||
++                (!track.active && settings[index].controls.level_match != track.settings.controls.level_match)))
++                track.reset();
 +            track.settings = settings[index];
-+            if (!track.settings.enabled) track.sleep();
 +        }
 +        return true;
 +    }
 +
 +    // Called on the audio role after project activation, before its first block.
 +    void reset() {
-+        for (auto& track : tracks_) track.sleep();
++        for (auto& track : tracks_) track.reset();
 +    }
 +
 +    bool needs_tail(u32 index) const { return index < track_count && tracks_[index].active; }
@@ -863,7 +926,13 @@ index 0000000..1d5a6f9
 +        bool active = false;
 +
 +        void sleep() {
-+            if (active) processor.reset();
++            if (settings.controls.level_match) processor.reset_signal();
++            else processor.reset();
++            active = false;
++        }
++
++        void reset() {
++            processor.reset();
 +            active = false;
 +        }
 +    };
