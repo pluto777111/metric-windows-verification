@@ -156,10 +156,10 @@ index 0000000..baa864a
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..4caa50f
+index 0000000..dff26ca
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,139 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
@@ -212,22 +212,23 @@ index 0000000..4caa50f
 +
 +    InputResult click(u32 encoder, bool shifted) {
 +        if (!open_ || encoder >= 4) return InputResult::stock;
-+        if (shifted) return InputResult::handled;
-+        if (encoder == 0) {
-+            post_cutoff_[track_] = !post_cutoff_[track_];
-+            return InputResult::page_changed;
++        if (shifted) {
++            if (encoder != 3) return InputResult::stock;
++            auto& settings = project_.track[track_];
++            if (!settings.enabled && count(project_) >= TrackInserts::insert_limit)
++                return InputResult::insert_limit;
++            settings.enabled = !settings.enabled;
++            return InputResult::settings_changed;
 +        }
-+        if (encoder != 3) return InputResult::handled;
-+        auto& settings = project_.track[track_];
-+        if (!settings.enabled && count(project_) >= TrackInserts::insert_limit)
-+            return InputResult::insert_limit;
-+        settings.enabled = !settings.enabled;
-+        return InputResult::settings_changed;
++        auto& position = shown_[track_][encoder];
++        const u32 count = encoder == 0 ? 3 : 2;
++        position = position + 1 == count ? 0 : position + 1;
++        return InputResult::page_changed;
 +    }
 +
 +    InputResult turn(u32 encoder, bool shifted, i32 detents, u32 acceleration) {
-+        if (!open_ || encoder >= 4) return InputResult::stock;
-+        const Binding param = binding(encoder, shifted, post_cutoff_[track_]);
++        if (!open_ || shifted || encoder >= 4) return InputResult::stock;
++        const Binding param = binding(encoder);
 +        i32& value = project_.track[track_].controls.*param.value;
 +        const i32 bounded = detents < -127 ? -127 : detents > 127 ? 127 : detents;
 +        const i32 speed = acceleration < 3 ? static_cast<i32>(acceleration + 1) : 4;
@@ -241,13 +242,13 @@ index 0000000..4caa50f
 +    }
 +
 +    bool panel(bool shifted, Panel& panel) const {
-+        if (!open_) return false;
++        if (!open_ || shifted) return false;
 +        const auto& settings = project_.track[track_];
 +        panel.track_number = track_ + 1;
 +        panel.enabled = settings.enabled;
 +        panel.enabled_count = count(project_);
 +        for (u32 i = 0; i < 4; ++i) {
-+            const Binding param = binding(i, shifted, post_cutoff_[track_]);
++            const Binding param = binding(i);
 +            panel.encoders[i] = {param.label, settings.controls.*param.value};
 +        }
 +        return true;
@@ -259,7 +260,7 @@ index 0000000..4caa50f
 +        if (count(project) > TrackInserts::insert_limit) return false;
 +        project_ = project;
 +        open_ = false;
-+        for (bool& alternate : post_cutoff_) alternate = false;
++        for (auto& track : shown_) for (auto& position : track) position = 0;
 +        return true;
 +    }
 +
@@ -269,17 +270,18 @@ index 0000000..4caa50f
 +        i32 Controls::*value;
 +    };
 +
-+    static Binding binding(u32 encoder, bool shifted, bool alternate) {
++    Binding binding(u32 encoder) const {
 +        static constexpr Binding main[] = {
 +            {"Character", &Controls::character}, {"Low Protect", &Controls::low_protect},
 +            {"Time", &Controls::time}, {"Mix", &Controls::mix},
 +        };
-+        static constexpr Binding shift[] = {
++        static constexpr Binding secondary[] = {
 +            {"Upward", &Controls::upward}, {"Downward", &Controls::downward},
 +            {"Attack", &Controls::attack}, {"Output Trim", &Controls::trim},
 +        };
-+        if (shifted) return shift[encoder];
-+        if (encoder == 0 && alternate) return {"Post Cutoff", &Controls::post_cutoff};
++        const u32 position = shown_[track_][encoder];
++        if (position == 1) return secondary[encoder];
++        if (position == 2) return {"Post Cutoff", &Controls::post_cutoff};
 +        return main[encoder];
 +    }
 +
@@ -290,7 +292,7 @@ index 0000000..4caa50f
 +    }
 +
 +    ProjectSettings project_;
-+    bool post_cutoff_[TrackInserts::track_count] = {};
++    opxy::u8 shown_[TrackInserts::track_count][4] = {};
 +    u32 track_ = TrackInserts::track_count;
 +    Page stock_page_ = Page::other;
 +    bool open_ = false;
@@ -435,10 +437,10 @@ index 0000000..d35c5d1
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..7c840ab
+index 0000000..e564f23
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,223 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
@@ -502,8 +504,32 @@ index 0000000..7c840ab
 +        }
 +        const bool fully_wet = mix == q31::maximum;
 +        i32 peak[3] = {};
++        i32 split[2 * opxy::block_frames][3];
++        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
++            for (u32 ch = 0; ch < 2; ++ch) {
++                const u32 index = 2 * frame + ch;
++                // Leave headroom for the differences of the crossover states.
++                const i32 dry = q31::shift_right(sum[index], 3);
++                const i32 low = follow(low_[ch], dry, 69100000); // 230 Hz
++                const i32 rest = dry - low;
++                const i32 mid = follow(mid_[ch], rest, crossover);
++                split[index][0] = low;
++                split[index][1] = mid;
++                split[index][2] = rest - mid;
++                for (u32 band = 0; band < 3; ++band) {
++                    const i32 value = split[index][band];
++                    const i32 magnitude = value < 0 ? ~value : value;
++                    if (magnitude > peak[band]) peak[band] = magnitude;
++                }
++            }
++        }
 +        i32 gain[3], step[3], target[3];
 +        for (u32 band = 0; band < 3; ++band) {
++            // Use this block's detector so the previous quiet block's upward
++            // gain cannot be carried into a loud hit.
++            const i32 band_release = release + (release / 2) * static_cast<i32>(band);
++            follow(envelope_[band], peak[band],
++                   peak[band] > envelope_[band] ? attack : band_release);
 +            gain[band] = unity + gain_delta_[band];
 +            // The high band normally carries less energy. Offset its knee
 +            // so quiet cymbal, noise and harmonics stay in the lift region.
@@ -518,7 +544,17 @@ index 0000000..7c840ab
 +            if (band == 2) band_gain += q31::multiply(band_gain, q31::multiply(brightness, 240000000));
 +            band_gain += q31::multiply(band_gain, output_delta);
 +            target[band] = band_gain - unity;
-+            step[band] = (target[band] - gain_delta_[band]) / static_cast<i32>(opxy::block_frames);
++            if (peak[band] > envelope_[band]) {
++                const i32 current_peak = band == 2 ? q31::half(peak[band]) : peak[band];
++                const i32 peak_delta = curve(current_peak) - unity;
++                if (peak_delta <= 0) {
++                    // Remove upward gain immediately on a transient entering
++                    // compression. The Attack knob still sets detector speed.
++                    if (target[band] > 0) target[band] = 0;
++                    if (gain[band] > unity) gain[band] = unity;
++                }
++            }
++            step[band] = (target[band] - (gain[band] - unity)) / static_cast<i32>(opxy::block_frames);
 +        }
 +
 +        // Seed the two poles from the current wet signal when engaging them.
@@ -528,21 +564,10 @@ index 0000000..7c840ab
 +            for (u32 band = 0; band < 3; ++band) gain[band] += step[band];
 +            for (u32 ch = 0; ch < 2; ++ch) {
 +                i32& sample = sum[2 * frame + ch];
-+                // Leave headroom for the differences of the crossover states.
-+                const i32 dry = q31::shift_right(sample, 3);
-+                const i32 low = follow(low_[ch], dry, 69100000); // 230 Hz
-+                const i32 rest = dry - low;
-+                const i32 mid = follow(mid_[ch], rest, crossover);
-+                const i32 bands[] = {low, mid, rest - mid};
-+
 +                // Q28 gains leave room for boost and recombination in Q31.
 +                i32 wet = 0;
-+                for (u32 band = 0; band < 3; ++band) {
-+                    const i32 value = bands[band];
-+                    const i32 magnitude = value < 0 ? ~value : value;
-+                    if (magnitude > peak[band]) peak[band] = magnitude;
-+                    wet += q31::multiply(value, gain[band]);
-+                }
++                for (u32 band = 0; band < 3; ++band)
++                    wet += q31::multiply(split[2 * frame + ch][band], gain[band]);
 +                if (post_filter) {
 +                    if (start_post && frame == 0) post_first_[ch] = post_second_[ch] = wet;
 +                    const i32 first = follow_post(post_first_[ch], wet, post_coefficient);
@@ -558,14 +583,7 @@ index 0000000..7c840ab
 +            }
 +        }
 +
-+        for (u32 band = 0; band < 3; ++band) {
-+            // Let upper-band tails recover sooner so the lift is audible
-+            // between hits, while the low band keeps a steadier envelope.
-+            const i32 band_release = release + (release / 2) * static_cast<i32>(band);
-+            follow(envelope_[band], peak[band],
-+                   peak[band] > envelope_[band] ? attack : band_release);
-+            gain_delta_[band] = target[band];
-+        }
++        for (u32 band = 0; band < 3; ++band) gain_delta_[band] = target[band];
 +    }
 +
 +private:
@@ -775,7 +793,7 @@ index 0000000..2bb43e5
 +    resume sdk_ott_stock_frame, 0x8d53, 0x9668
 diff --git a/sdk/platform/opxy-1.2.1/ott_insert.cpp b/sdk/platform/opxy-1.2.1/ott_insert.cpp
 new file mode 100644
-index 0000000..3a3db39
+index 0000000..f78fd6a
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_insert.cpp
 @@ -0,0 +1,200 @@
@@ -898,7 +916,7 @@ index 0000000..3a3db39
 +    }
 +    line(0, 14, 30, title);
 +    line(1, 14, 59, status);
-+    line(2, 14, 190, limit_hit ? "Four-track limit" : "M3 Filter   E1 Cutoff   E4 On/Off");
++    line(2, 14, 190, limit_hit ? "Four-track limit" : "Shift+E4 On/Off");
 +    for (u32 i = 0; i < 4; ++i) {
 +        const i32 x = 14 + static_cast<i32>(i) * 117;
 +        const u32 percent = (static_cast<u32>(panel.encoders[i].value) / (ott::q31::maximum / 100));

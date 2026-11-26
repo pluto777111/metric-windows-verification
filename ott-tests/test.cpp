@@ -125,7 +125,6 @@ void test_device_controls(const Block& input) {
     ott::Panel panel{};
     using ott::InputResult;
     using ott::Page;
-
     controller.select(0, Page::other);
     require(controller.m3(false) == InputResult::stock,
             "The first M3 press belongs to stock");
@@ -135,6 +134,7 @@ void test_device_controls(const Block& input) {
     require(controller.panel(false, panel) && !panel.enabled && panel.track_number == 1 &&
             std::strcmp(panel.encoders[3].label, "Mix") == 0, "Main row must show far-right Mix");
     require(controller.click(0, false) == InputResult::page_changed &&
+            controller.click(0, false) == InputResult::page_changed &&
             controller.panel(false, panel) && std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
             "Clicking encoder one must show Post Cutoff");
     const auto before = controller.project().track[0].controls;
@@ -142,15 +142,27 @@ void test_device_controls(const Block& input) {
             controller.project().track[0].controls.post_cutoff < before.post_cutoff &&
             controller.project().track[0].controls.character == before.character,
             "Post Cutoff must have independent storage");
-    require(controller.panel(true, panel) && std::strcmp(panel.encoders[0].label, "Upward") == 0 &&
-            std::strcmp(panel.encoders[3].label, "Output Trim") == 0,
-            "Shift must show the sculpting controls even when Post Cutoff is active");
-    require(controller.turn(0, true, 127, 3) == InputResult::settings_changed &&
+    require(!controller.panel(true, panel) &&
+            controller.turn(0, true, 5, 0) == InputResult::stock &&
+            controller.click(1, true) == InputResult::stock,
+            "Shift must hand display, turns, and clicks back to the stock filter");
+    require(controller.click(0, false) == InputResult::page_changed &&
+            controller.click(0, false) == InputResult::page_changed &&
+            controller.click(3, false) == InputResult::page_changed &&
+            controller.panel(false, panel) && std::strcmp(panel.encoders[0].label, "Upward") == 0 &&
+            std::strcmp(panel.encoders[1].label, "Low Protect") == 0 &&
+            std::strcmp(panel.encoders[3].label, "Output Trim") == 0 && !panel.enabled,
+            "A single click must switch only its own encoder without enabling the insert");
+    require(controller.turn(0, false, 127, 3) == InputResult::settings_changed &&
             controller.project().track[0].controls.upward == full,
-            "Large shifted turns must clamp without overflow");
-    require(controller.click(3, true) == InputResult::handled && !controller.project().track[0].enabled,
-            "A shifted click must preserve enable state");
-    require(controller.click(3, false) == InputResult::settings_changed, "Clicking Mix must enable OTT");
+            "Large turns on a secondary parameter must clamp without overflow");
+    require(controller.click(0, false) == InputResult::page_changed && controller.panel(false, panel) &&
+            std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
+            "Encoder one must cycle to Post Cutoff");
+    require(controller.click(3, false) == InputResult::page_changed && !controller.project().track[0].enabled,
+            "A single unshifted click on encoder four must leave bypass untouched");
+    require(controller.click(3, true) == InputResult::settings_changed,
+            "Shift plus encoder four must enable OTT immediately");
     require(controller.m3(false) == InputResult::page_changed && controller.page() == Page::filter,
             "M3 on OTT must return to Filter");
 
@@ -158,7 +170,7 @@ void test_device_controls(const Block& input) {
         controller.select(track, Page::filter);
         require(controller.m3(false) == InputResult::page_changed, "Open OTT on the selected track");
         const auto expected = track == 4 ? InputResult::insert_limit : InputResult::settings_changed;
-        require(controller.click(3, false) == expected, "The controller must enforce the four-insert cap");
+        require(controller.click(3, true) == expected, "The controller must enforce the four-insert cap");
     }
     require(controller.panel(false, panel) && panel.enabled_count == 4 && !panel.enabled,
             "The fifth track's panel must report four slots in use");
@@ -185,6 +197,26 @@ void test_device_controls(const Block& input) {
     require(wet != input, "The hardware control snapshot must affect the audio track");
     require(audio.process(4, untouched.data(), 1) == 1 && untouched == input,
             "The rejected fifth insert must stay dry");
+}
+
+void test_loud_hit_after_quiet_material() {
+    for (int mix : {25, 100}) {
+        ott::Processor processor;
+        ott::Controls controls;
+        controls.mix = static_cast<opxy::i32>(static_cast<opxy::i64>(full) * mix / 100);
+        for (unsigned block = 0; block < 130; ++block) {
+            Block input{};
+            for (unsigned frame = 0; frame < opxy::block_frames; ++frame) {
+                const double phase = 6.283185307 * 879 * (block * opxy::block_frames + frame) / 44100;
+                input[2 * frame] = input[2 * frame + 1] = static_cast<opxy::i32>(
+                    full * (block < 128 ? .015 : .88) * std::sin(phase));
+            }
+            processor.process(input.data(), controls);
+            for (auto sample : input)
+                require(sample != full && sample != -full - 1,
+                        "The first loud blocks must not carry upward gain from quiet material");
+        }
+    }
 }
 
 int main() {
@@ -247,6 +279,7 @@ int main() {
     output = input;
     processor.process(output.data(), controls);
     require(output == input, "Mix zero must bypass the post cutoff");
+    test_loud_hit_after_quiet_material();
     test_track_inserts(input);
     test_device_controls(input);
     std::cout << "OTT host checks passed\n";

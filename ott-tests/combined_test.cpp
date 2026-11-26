@@ -59,9 +59,10 @@ int main() {
     auto switch_track = [&](u32 track) {
         ui.select(track, ott::Page::filter);
         assert(ui.m3(false) == ott::InputResult::page_changed);
-        return ui.click(3, false);
+        return ui.click(3, true);
     };
     assert(switch_track(0) == ott::InputResult::settings_changed);
+    assert(ui.click(0, false) == ott::InputResult::page_changed);
     assert(ui.click(0, false) == ott::InputResult::page_changed);
     assert(ui.turn(0, false, -24, 0) == ott::InputResult::settings_changed);
     ott::publish(ui.project(), 1, false, 2, send);
