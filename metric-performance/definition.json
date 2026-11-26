@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "id": "metric",
+  "name": "METRIC",
+  "parameters": [
+    {
+      "id": "morph",
+      "label": "morph",
+      "default": 0.3,
+      "mapping": {
+        "kind": "linear",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "display": "percent"
+    },
+    {
+      "id": "density",
+      "label": "dens",
+      "default": 0.5,
+      "mapping": {
+        "kind": "linear",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "display": "percent"
+    },
+    {
+      "id": "rotation",
+      "label": "rotate",
+      "default": 0.03,
+      "mapping": {
+        "kind": "enum",
+        "labels": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ]
+      },
+      "display": "enum"
+    },
+    {
+      "id": "phrase",
+      "label": "phrase",
+      "default": 0.35,
+      "mapping": {
+        "kind": "enum",
+        "labels": [
+          "1 bar",
+          "2 bars",
+          "4 bars",
+          "8 bars",
+          "16 bars",
+          "32 bars",
+          "64 bars"
+        ]
+      },
+      "display": "enum"
+    },
+    {
+      "id": "ratio",
+      "label": "ratio",
+      "default": 0.167,
+      "mapping": {
+        "kind": "enum",
+        "labels": [
+          "1:1",
+          "3:2",
+          "5:4"
+        ]
+      },
+      "display": "enum",
+      "control": 0
+    },
+    {
+      "id": "ratchet",
+      "label": "ratchet",
+      "default": 0,
+      "mapping": {
+        "kind": "linear",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "display": "percent",
+      "control": 1
+    },
+    {
+      "id": "target_a",
+      "label": "track A",
+      "default": 0.0625,
+      "mapping": {
+        "kind": "enum",
+        "labels": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8"
+        ]
+      },
+      "display": "enum",
+      "control": 2
+    },
+    {
+      "id": "target_b",
+      "label": "track B",
+      "default": 0.1875,
+      "mapping": {
+        "kind": "enum",
+        "labels": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8"
+        ]
+      },
+      "display": "enum",
+      "control": 3
+    }
+  ],
+  "presets": {
+    "init": {
+      "morph": 0.3,
+      "density": 0.5,
+      "rotation": 0.03,
+      "phrase": 0.35,
+      "ratio": 0.167,
+      "ratchet": 0,
+      "target_a": 0.0625,
+      "target_b": 0.1875
+    }
+  },
+  "resources": {
+    "voiceBytes": 1064,
+    "voiceAlignment": 4,
+    "voiceCapacity": 1,
+    "sharedBytes": 0,
+    "outputPeakQ31": 1073741824,
+    "display": {
+      "stateBytes": 20,
+      "stateAlignment": 4,
+      "paths": 0,
+      "points": 0,
+      "nodes": 42,
+      "texts": 26,
+      "palette": 16
+    },
+    "trackControl": {
+      "stateBytes": 3364,
+      "stateAlignment": 4,
+      "unique": true,
+      "aux": [
+        12
+      ],
+      "savedBytes": 4
+    }
+  },
+  "press": "page"
+}

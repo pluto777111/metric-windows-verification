@@ -1,0 +1,119 @@
+name: METRIC four-track performance Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/performance-native.yml'
+      - 'metric-performance/**'
+      - 'sdk-pattern-input.patch'
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Authenticate and extract build inputs
+        run: |
+          $archive = Join-Path $PWD 'source.zip'
+          $expected = 'c28f62389d6813b4edb54e6db6141b15b37fde5acf609cdf05b8324ed3aed04f'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) {
+            throw 'Source archive does not match the verified Git LFS object.'
+          }
+          $inputs = Join-Path $env:RUNNER_TEMP 'metric-inputs'
+          python -m zipfile -e $archive $inputs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $stock = Join-Path $inputs 'stock-original-os.ldr'
+          if ((Get-FileHash $stock -Algorithm SHA256).Hash -ne '60358afdaa9b58ed40411602f6d5d4e1e3e02553ff2da7e25038e71dd002b52f') {
+            throw 'Stock OP-XY 1.2.1 image hash mismatch.'
+          }
+      - name: Apply the read-only SDK input adapter
+        run: |
+          Set-Location (Join-Path $env:RUNNER_TEMP 'metric-inputs/open-xy')
+          $patch = Join-Path $env:RUNNER_TEMP 'sdk-pattern-input-lf.patch'
+          @'
+          import os
+          from pathlib import Path
+
+          original = Path(os.environ['GITHUB_WORKSPACE']) / 'sdk-pattern-input.patch'
+          normalized = Path(os.environ['RUNNER_TEMP']) / 'sdk-pattern-input-lf.patch'
+          normalized.write_bytes(original.read_bytes().replace(bytes([13, 10]), bytes([10])))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -c core.autocrlf=false apply --check $patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -c core.autocrlf=false apply $patch
+      - name: Authenticate the pinned Blackfin toolchain
+        run: |
+          Set-Location (Join-Path $env:RUNNER_TEMP 'metric-inputs/open-xy')
+          python sdk.py toolchain fetch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python sdk.py doctor --toolchain
+      - name: Build METRIC v0.9 and independently verify the package
+        run: |
+          $inputs = Join-Path $env:RUNNER_TEMP 'metric-inputs'
+          $stock = Join-Path $inputs 'stock-original-os.ldr'
+          $output = Join-Path $env:RUNNER_TEMP 'metric-native-baseline'
+          Set-Location (Join-Path $inputs 'open-xy')
+          @'
+          import json
+          from pathlib import Path
+
+          from tooling.catalog import OFFICIAL
+          from tooling.machines import machine_at
+
+          catalog = Path('local/catalog')
+          collection = json.loads((catalog / 'metric-collection.json').read_text(encoding='utf-8'))
+          collection['machines'] = [
+              entry for entry in collection['machines']
+              if machine_at(catalog / entry['path']).id in OFFICIAL
+          ]
+          (catalog / 'metric-native-baseline.json').write_text(json.dumps(collection), encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $metric = Join-Path $env:GITHUB_WORKSPACE 'metric-performance'
+          python sdk.py build --collection local/catalog/metric-native-baseline.json --machine $metric --layout local/METRIC-layout-standard-memory.json --stock-os $stock --profiling on --sweep on --out $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python sdk.py verify --package $output --stock-os $stock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $verification = Get-Content (Join-Path $output 'verification.json') -Raw | ConvertFrom-Json
+          if ($verification.linked -notcontains 'metric') {
+            throw 'The SDK linked its core fallback without METRIC.'
+          }
+          $manifest = Get-Content (Join-Path $output 'manifest.json') -Raw | ConvertFrom-Json
+          $ids = $manifest.layout.metric
+          if ($ids.engine -ne 163 -or $ids.page -ne 139) {
+            throw 'METRIC engine/page registry mismatch.'
+          }
+          Get-FileHash (Join-Path $output 'candidate/os.ldr') -Algorithm SHA256
+      - name: Archive layout and verification reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: metric-performance-windows-verification
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/metric-native-baseline/layout.json
+            ${{ runner.temp }}/metric-native-baseline/manifest.json
+            ${{ runner.temp }}/metric-native-baseline/verification.json
+            ${{ runner.temp }}/metric-native-baseline/analysis/compile-report.json
+      - name: Archive experimental candidate in the private repository
+        if: ${{ github.event.repository.private }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: metric-performance-experimental-candidate
+          if-no-files-found: error
+          path: ${{ runner.temp }}/metric-native-baseline/candidate/

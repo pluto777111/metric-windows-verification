@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "sdk": "1.11",
+  "kind": "synth",
+  "description": "METRIC: dual-lane Euclidean and ratio sequencer on aux 12, triggering tracks 1-8"
+}
