@@ -233,7 +233,12 @@ void test_limiter() {
 }
 
 void test_level_match(double hz, double amplitude, bool pulses, const ott::Controls& auto_controls) {
-    ott::Processor matched, uncorrected;
+    ott::TrackInserts matched;
+    ott::TrackSettings settings[ott::TrackInserts::track_count]{};
+    settings[0].enabled = true;
+    settings[0].controls = auto_controls;
+    require(matched.configure(settings), "One insert must configure");
+    ott::Processor uncorrected;
     auto manual = auto_controls;
     manual.level_match = 0;
     double dry_energy = 0, wet_energy = 0, off_energy = 0;
@@ -250,7 +255,7 @@ void test_level_match(double hz, double amplitude, bool pulses, const ott::Contr
         }
         auto wet = dry;
         auto off = dry;
-        matched.process(wet.data(), auto_controls);
+        matched.process(0, wet.data(), pulses && block % 512 >= 300 ? 0 : 1);
         uncorrected.process(off.data(), manual);
         if (block >= 3072) {
             for (unsigned i = 0; i < dry.size(); ++i) {
@@ -260,8 +265,15 @@ void test_level_match(double hz, double amplitude, bool pulses, const ott::Contr
             }
         }
         if (pulses && block % 512 == 511) {
-            require(matched.settled(), "Silence must stop keeping the track awake");
-            matched.reset_signal();
+            require(!matched.needs_tail(0), "Silence must stop keeping the track awake");
+            settings[0].enabled = false;
+            require(matched.configure(settings), "Bypass the matched insert");
+            Block bypass = {123456, -98765};
+            const Block original = bypass;
+            matched.process(0, bypass.data(), 1);
+            require(bypass == original, "Match must pass audio through while OTT is bypassed");
+            settings[0].enabled = true;
+            require(matched.configure(settings), "Re-enable the matched insert");
             uncorrected.reset();
         }
     }

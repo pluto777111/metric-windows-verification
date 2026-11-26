@@ -854,10 +854,10 @@ index 0000000..e403c10
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp b/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp
 new file mode 100644
-index 0000000..1d8b432
+index 0000000..b6398f0
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,84 @@
 +#pragma once
 +
 +#include "ott.hpp"
@@ -886,9 +886,11 @@ index 0000000..1d8b432
 +        if (enabled > insert_limit) return false;
 +        for (u32 index = 0; index < track_count; ++index) {
 +            auto& track = tracks_[index];
-+            if (track.settings.enabled && (!settings[index].enabled ||
-+                (!track.active && settings[index].controls.level_match != track.settings.controls.level_match)))
++            if (settings[index].controls.level_match != track.settings.controls.level_match &&
++                (!track.active || !settings[index].enabled))
 +                track.reset();
++            else if (!settings[index].enabled && track.settings.enabled)
++                track.sleep();
 +            track.settings = settings[index];
 +        }
 +        return true;
