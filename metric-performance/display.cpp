@@ -23,6 +23,7 @@ inline void display_reset(DisplayState& state){state.header.reset();}
 inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& frame){
   const auto page=opxy::control::from_control(9);
   const bool audition=page>=2;
+  auto header_input=input;
   char values[8][header_capacity];
   const char* names[8];
   const unsigned choices[8]={0,0,16,7,3,0,8,8};
@@ -46,29 +47,43 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
     static const char* const interplay[]={"INDEP","SPACE","ANSWER"};
     static const char* const journeys[]={"SMOOTH","FRAGMENT","SURPRISE"};
     static const char* const qualities[]={"SETTLE","HOLD","BUILD"};
-    const bool shifted=opxy::control::from_control(13)!=0;
+    static const char* const octaves[]={"-2","-1","0","+1","+2"};
+    const unsigned modifiers=opxy::control::from_control(13);
+    const bool shifted=(modifiers&1u)!=0;
+    for(unsigned i=0;i<4;++i) header_input.shown[i]=i;
+    if(page==2 && !shifted && (modifiers&2u)) header_input.shown[1]=5;
     const unsigned word=page==4 ? 15 : page==3 ? (shifted ? 14 : 12) : shifted ? 11 : 10;
     const unsigned bank=opxy::control::from_control(word);
     const unsigned knob[4]={bank&255,(bank>>8)&255,(bank>>16)&255,bank>>24};
     for(unsigned i=0;i<8;++i) { names[i]=""; values[i][0]=0; }
     if(page==4) {
-      const bool scaling=knob[3]>=128;
       const unsigned span=1+(knob[0]>>2);
-      names[0]="bar"; names[1]="pin"; names[2]="quality"; names[3]=scaling ? "bar scale" : "evolve";
+      names[0]="bar"; names[1]="pin"; names[2]="quality"; names[3]="evolve"; names[7]="bar scale";
       number(values[0],1+(knob[0]&3)*span);
       copy(values[1],header_capacity,knob[1] ? "ON" : "OFF");
       copy(values[2],header_capacity,qualities[knob[2]%3]);
-      number(values[3],scaling ? span : knob[3]);
+      number(values[3],knob[3]);
+      number(values[7],span);
+      if(modifiers&8u) header_input.shown[3]=7;
     } else if(page==3 && shifted) {
-      names[4]="track C"; names[5]="track D";
-      number(values[4],knob[0]+1);
-      number(values[5],knob[1]+1);
+      static const char* const routes[]={"track A","track B","track C","track D"};
+      for(unsigned i=0;i<4;++i) {
+        names[i]=routes[i];
+        number(values[i],knob[i]+1);
+      }
     } else if(page==3) {
+      static const char* const octave_labels[]={"oct A","oct B","oct C","oct D"};
       names[0]="output"; names[1]="root"; names[2]="scale"; names[3]="source";
       copy(values[0],header_capacity,modes[knob[0]%3]);
       copy(values[1],header_capacity,roots[knob[1]%12]);
       copy(values[2],header_capacity,scales[knob[2]%16]);
       copy(values[3],header_capacity,sources[knob[3]%3]);
+      for(unsigned i=0;i<4;++i) {
+        names[i+4]=octave_labels[i];
+        const unsigned octave=(modifiers>>(16+i*4))&15;
+        copy(values[i+4],header_capacity,octaves[octave<5 ? octave : 2]);
+        if(modifiers&4u) header_input.shown[i]=i+4;
+      }
     } else if(shifted) {
       names[0]="interplay"; names[1]="dest"; names[2]="journey"; names[3]="pace";
       copy(values[0],header_capacity,interplay[knob[0]%3]);
@@ -78,14 +93,16 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
     } else {
       names[0]="rhythm"; names[1]="pitch"; names[2]="scatter"; names[3]="tension";
       for(unsigned i=0;i<4;++i) number(values[i],knob[i]);
-      if(knob[1]>=126 && knob[1]<=130) {
-        static const char* const octaves[]={"-2","-1","0","+1","+2"};
-        names[1]="octave";
-        copy(values[1],header_capacity,octaves[knob[1]-126]);
-      }
+      const unsigned octave=(modifiers>>8)&255;
+      names[5]="octave";
+      copy(values[5],header_capacity,octaves[octave<5 ? octave : 2]);
     }
   }
-  page_header(state.header,input,frame,names,values,0);
+  page_header(state.header,header_input,frame,names,values,0);
+  if(page==2 && header_input.shown[1]==5)
+    for(unsigned i=0;i<4;++i) if(i!=1) header(frame,i,values[i]);
+  if(page==4 && header_input.shown[3]==7)
+    for(unsigned i=0;i<3;++i) header(frame,i,values[i]);
   metric_core::Settings s;
   s.morph=static_cast<uint8_t>(knobs[0]);
   s.density=static_cast<uint8_t>(knobs[1]);
@@ -110,7 +127,7 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
 
   text(frame,16,12*unit,55*unit,unit,
        page==4 ? "METRIC / ANCHORS" : page==3 ? "METRIC / OUTPUT" :
-       audition ? "METRIC / PHRASE EVOLUTION" : "METRIC   /   TWO CLOCKS");
+       audition ? "METRIC / EVOLUTION" : "METRIC   /   TWO CLOCKS");
   if(audition) {
     text(frame,17,12*unit,79*unit,unit,"SHARED PHRASE");
     text(frame,18,12*unit,137*unit,unit,page==4 ? "FOUR-BAR STRUCTURE" : "GEN / TRACK / BOTH");

@@ -2,6 +2,12 @@
 #include <cassert>
 
 static unsigned source_reads;
+static opxy::i32 written_routes[2];
+static bool save_route(opxy::u32 track,opxy::u32 slot,opxy::i32 value) {
+  assert(track==11 && (slot==6 || slot==7));
+  written_routes[slot-6]=value;
+  return true;
+}
 static opxy::control::PatternTiming source_timing{384,0};
 static bool read_source(opxy::u32 track, opxy::control::PatternEvent* events,
                         opxy::u32 capacity, opxy::u32& count,
@@ -147,6 +153,45 @@ int main() {
   edits.turns[0]={3,0,2};
   control(controls,edits,feedback);
   assert(controls.performance.anchor_span==3 && controls.performance.evolve==0);
+
+  edits.page_key=3;
+  edits.turn_count=0;
+  control(controls,edits,feedback);
+  edits.page_key=0;
+  edits.shift=1;
+  edits.set_own_parameter=save_route;
+  edits.turn_count=4;
+  for(unsigned i=0;i<4;++i) edits.turns[i]={static_cast<opxy::u8>(i),0,1};
+  control(controls,edits,feedback);
+  assert(decode(written_routes[0],8)==1 && decode(written_routes[1],8)==1);
+  assert(controls.settings.target_a==1 && controls.settings.target_b==1);
+  assert(controls.performance.target_c==3 && controls.performance.target_d==4);
+  edits.values[11][6]=written_routes[0];
+  edits.values[11][7]=written_routes[1];
+  edits.shift=0;
+  edits.turn_count=3;
+  edits.turns[0]={0,0,0};
+  edits.turns[1]={0,0,1};
+  edits.turns[2]={2,0,-1};
+  control(controls,edits,feedback);
+  assert(controls.performance.lane_octave[0]==1 && controls.performance.lane_octave[2]==-1);
+  assert(controls.performance.lane_octave[1]==0 && controls.performance.lane_octave[3]==0);
+  assert(controls.settings.target_a==1 && controls.performance.target_c==3);
+  edits.turn_count=0;
+  edits.page_key=2;
+  control(controls,edits,feedback);
+  assert(controls.performance.editing_octave && controls.performance.editing_anchor_scale);
+  edits.page_key=3;
+  control(controls,edits,feedback);
+  assert(controls.performance.editing_lane_octaves);
+  opxy::u8 saved[10];
+  assert(control_save(controls,saved,sizeof(saved))==sizeof(saved));
+  ControlState restored{};
+  control_load(restored,saved,sizeof(saved));
+  assert(restored.performance.target_c==3 && restored.performance.target_d==4);
+  assert(restored.performance.lane_octave[0]==1 && restored.performance.lane_octave[2]==-1);
+  control_load(restored,saved,4);
+  assert(restored.performance.target_c==2 && restored.performance.lane_octave[0]==0);
 
   metric_core::Bar collisions{};
   uint8_t lanes[metric_core::MAX_EVENTS]{};

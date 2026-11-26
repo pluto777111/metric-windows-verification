@@ -19,6 +19,8 @@ struct Performance {
     int octave;
     unsigned anchor_span;
     bool editing_octave, editing_anchor_scale;
+    bool editing_lane_octaves;
+    signed char lane_octave[4];
 };
 
 inline unsigned shifted_octave(unsigned pitch, int octave) {
@@ -92,7 +94,8 @@ inline void render_shared_phrase(Performance& performance, const metric_core::Se
         const int answer_delay = lane==1 && performance.interplay==2 ? 48 : 0;
         event.tick=(int(event.tick)+offset+answer_delay+int(metric_core::BAR_TICKS))%metric_core::BAR_TICKS;
         event.pitch=output_pitch(mode,note.degree,performance.root,performance.scale);
-        if(mode!=OutputMode::drum) event.pitch=shifted_octave(event.pitch,performance.octave);
+        if(mode!=OutputMode::drum)
+            event.pitch=shifted_octave(event.pitch,performance.octave+performance.lane_octave[lane]);
         event.velocity=note.accent ? 105 : event.velocity;
         lanes[keep]=static_cast<uint8_t>(lane);
         output.events[keep++]=event;
@@ -185,7 +188,7 @@ inline void render_generated_lanes(const Performance& p,const metric_core::Setti
                            output_pitch(mode,degree,p.root,p.scale)+(lane%2?12:0);
             if(mode!=OutputMode::drum)
                 pitch=evolved_pitch(p,pitch,bar,48+p.root+(lane%2?12:0));
-            if(mode!=OutputMode::drum) pitch=shifted_octave(pitch,p.octave);
+            if(mode!=OutputMode::drum) pitch=shifted_octave(pitch,p.octave+p.lane_octave[lane]);
             if(mode==OutputMode::scale_lock) pitch=locked_pitch(pitch,p.root,p.scale);
             event.pitch=static_cast<uint8_t>(pitch);
             append_performance_event(out,lanes,event,lane,master.ratchet!=0);
@@ -239,7 +242,7 @@ inline void render_programmed_phrase(const Performance& p, const metric_core::Se
             if(near) continue;
         }
         if(mode!=OutputMode::drum) pitch=evolved_pitch(p,pitch,bar,notes[0].pitch);
-        if(mode!=OutputMode::drum) pitch=shifted_octave(pitch,p.octave);
+        if(mode!=OutputMode::drum) pitch=shifted_octave(pitch,p.octave+p.lane_octave[1]);
         if(mode==OutputMode::scale_lock) pitch=locked_pitch(pitch,p.root,p.scale);
         if(mode==OutputMode::drum && pitch!=36 && pitch!=38 && pitch!=42 && pitch!=46)
             pitch=output_pitch(mode,pitch%7,p.root,p.scale);
