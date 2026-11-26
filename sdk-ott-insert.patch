@@ -167,10 +167,10 @@ index 0000000..baa864a
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..8ae7fd6
+index 0000000..cefbd70
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,149 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
@@ -187,6 +187,7 @@ index 0000000..8ae7fd6
 +struct EncoderValue {
 +    const char* label;
 +    i32 value;
++    bool toggle;
 +};
 +
 +struct Panel {
@@ -225,14 +226,10 @@ index 0000000..8ae7fd6
 +        if (!open_ || encoder >= 4) return InputResult::stock;
 +        if (shifted) {
 +            if (encoder != 3) return InputResult::stock;
-+            auto& settings = project_.track[track_];
-+            if (!settings.enabled && count(project_) >= TrackInserts::insert_limit)
-+                return InputResult::insert_limit;
-+            settings.enabled = !settings.enabled;
-+            return InputResult::settings_changed;
++            return set_enabled(!project_.track[track_].enabled);
 +        }
 +        auto& position = shown_[track_][encoder];
-+        const u32 count = encoder == 0 ? 3 : 2;
++        const u32 count = encoder == 0 || encoder == 3 ? 3 : 2;
 +        const u32 next = static_cast<u32>(position) + 1;
 +        position = next == count ? 0 : static_cast<opxy::u8>(next);
 +        return InputResult::page_changed;
@@ -242,6 +239,7 @@ index 0000000..8ae7fd6
 +        if (!open_ || encoder >= 4) return InputResult::stock;
 +        if (shifted) return InputResult::handled;
 +        const Binding param = binding(encoder);
++        if (!param.value) return detents ? set_enabled(detents > 0) : InputResult::handled;
 +        i32& value = project_.track[track_].controls.*param.value;
 +        const i32 bounded = detents < -127 ? -127 : detents > 127 ? 127 : detents;
 +        const i32 speed = acceleration < 3 ? static_cast<i32>(acceleration + 1) : 4;
@@ -262,7 +260,7 @@ index 0000000..8ae7fd6
 +        panel.enabled_count = count(project_);
 +        for (u32 i = 0; i < 4; ++i) {
 +            const Binding param = binding(i);
-+            panel.encoders[i] = {param.label, settings.controls.*param.value};
++            panel.encoders[i] = {param.label, param.value ? settings.controls.*param.value : settings.enabled, !param.value};
 +        }
 +        return true;
 +    }
@@ -294,8 +292,18 @@ index 0000000..8ae7fd6
 +        };
 +        const u32 position = shown_[track_][encoder];
 +        if (position == 1) return secondary[encoder];
-+        if (position == 2) return {"Post Cutoff", &Controls::post_cutoff};
++        if (position == 2)
++            return encoder == 0 ? Binding{"Post Cutoff", &Controls::post_cutoff}
++                                : Binding{"Enable", nullptr};
 +        return main[encoder];
++    }
++
++    InputResult set_enabled(bool enabled) {
++        auto& settings = project_.track[track_];
++        if (settings.enabled == enabled) return InputResult::handled;
++        if (enabled && count(project_) >= TrackInserts::insert_limit) return InputResult::insert_limit;
++        settings.enabled = enabled;
++        return InputResult::settings_changed;
 +    }
 +
 +    static u32 count(const ProjectSettings& project) {
@@ -815,10 +823,10 @@ index 0000000..2fda65f
 +    resume sdk_ott_stock_off_popup, 0x8d53, 0xa6ac
 diff --git a/sdk/platform/opxy-1.2.1/ott_insert.cpp b/sdk/platform/opxy-1.2.1/ott_insert.cpp
 new file mode 100644
-index 0000000..75c53bb
+index 0000000..aba69f0
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_insert.cpp
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,239 @@
 +#include "ott_filter/firmware_runtime.hpp"
 +#include "ott_project.hpp"
 +#include "opxy/draw.hpp"
@@ -936,9 +944,13 @@ index 0000000..75c53bb
 +    }
 +    line(0, 14, 30, title);
 +    line(1, 14, 59, status);
-+    line(2, 14, 190, limit_hit ? "Four-track limit" : "Shift+E4 On/Off");
++    line(2, 14, 190, limit_hit ? "Four-track limit" : "E4: Mix / Trim / Enable");
 +    for (u32 i = 0; i < 4; ++i) {
 +        const i32 x = 14 + static_cast<i32>(i) * 117;
++        if (panel.encoders[i].toggle) {
++            line(7 + i, x, 140, panel.enabled ? "ON" : "OFF");
++            continue;
++        }
 +        const u32 percent = (static_cast<u32>(panel.encoders[i].value) / (ott::q31::maximum / 100));
 +        char value[] = "100%";
 +        if (percent < 100) {

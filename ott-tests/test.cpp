@@ -159,10 +159,17 @@ void test_device_controls(const Block& input) {
     require(controller.click(0, false) == InputResult::page_changed && controller.panel(panel) &&
             std::strcmp(panel.encoders[0].label, "Post Cutoff") == 0,
             "Encoder one must cycle to Post Cutoff");
-    require(controller.click(3, false) == InputResult::page_changed && !controller.project().track[0].enabled,
-            "A single unshifted click on encoder four must leave bypass untouched");
-    require(controller.click(3, true) == InputResult::settings_changed,
-            "Shift plus encoder four must enable OTT immediately");
+    require(controller.click(3, false) == InputResult::page_changed && controller.panel(panel) &&
+            std::strcmp(panel.encoders[3].label, "Enable") == 0 && panel.encoders[3].toggle && !panel.enabled,
+            "The white encoder must reach Enable without changing the insert");
+    require(controller.turn(3, false, 1, 0) == InputResult::settings_changed &&
+            controller.panel(panel) && panel.enabled,
+            "Turn right must enable OTT without Shift");
+    require(controller.turn(3, false, 1, 0) == InputResult::handled &&
+            controller.turn(3, false, -1, 0) == InputResult::settings_changed,
+            "Enable must be directional and repeated turns must leave it on");
+    require(controller.turn(3, false, 1, 0) == InputResult::settings_changed,
+            "Turn right must re-enable OTT");
     require(controller.panel(panel) && panel.enabled, "OTT must show ON while Shift is held");
     require(controller.module(3, false) == InputResult::stock &&
             controller.click(3, true) == InputResult::stock,
@@ -175,7 +182,9 @@ void test_device_controls(const Block& input) {
         controller.select(track, Page::envelope);
         require(controller.module(2, false) == InputResult::page_changed, "Open OTT on the selected track");
         const auto expected = track == 4 ? InputResult::insert_limit : InputResult::settings_changed;
-        require(controller.click(3, true) == expected, "The controller must enforce the four-insert cap");
+        require(controller.click(3, false) == InputResult::page_changed &&
+                controller.click(3, false) == InputResult::page_changed &&
+                controller.turn(3, false, 1, 0) == expected, "Enable must enforce the four-insert cap");
     }
     require(controller.panel(panel) && panel.enabled_count == 4 && !panel.enabled,
             "The fifth track's panel must report four slots in use");

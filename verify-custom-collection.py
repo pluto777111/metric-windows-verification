@@ -20,7 +20,7 @@ if action == 'prepare':
     from tooling.machines import machine_at
     from tooling.extensions import extension_at
 
-    catalog = Path('local/catalog')
+    catalog = Path('local/catalog').resolve()
     source = json.loads((catalog / 'metric-collection.json').read_bytes())
     entries = [machine_at(catalog / item['path']).id for item in source['machines']]
     extensions = [extension_at(catalog / item['path']).id for item in source['extensions']]
