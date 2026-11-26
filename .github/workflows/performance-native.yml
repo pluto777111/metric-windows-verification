@@ -6,7 +6,7 @@ on:
     paths:
       - '.github/workflows/performance-native.yml'
       - 'metric-performance/**'
-      - 'sdk-pattern-input.patch'
+      - 'sdk-scaled-pattern-input.patch'
 
 permissions:
   contents: read
@@ -49,7 +49,7 @@ jobs:
           import os
           from pathlib import Path
 
-          original = Path(os.environ['GITHUB_WORKSPACE']) / 'sdk-pattern-input.patch'
+          original = Path(os.environ['GITHUB_WORKSPACE']) / 'sdk-scaled-pattern-input.patch'
           normalized = Path(os.environ['RUNNER_TEMP']) / 'sdk-pattern-input-lf.patch'
           normalized.write_bytes(original.read_bytes().replace(bytes([13, 10]), bytes([10])))
           '@ | python -

@@ -1,0 +1,165 @@
+diff --git a/sdk/include/opxy/track_control.hpp b/sdk/include/opxy/track_control.hpp
+index 3083ee1..86ed80d 100644
+--- a/sdk/include/opxy/track_control.hpp
++++ b/sdk/include/opxy/track_control.hpp
+@@ -56,9 +56,16 @@ struct Entry { u8 track, index; u16 reserved; i32 value; };
+ struct Note { u8 track, pitch, velocity, reserved; u32 length_us; };
+ // A turn of one of the machine's own encoders: the parameter slot its page
+ // position shows (0..7) and the detents it covers, signed: +1 or -1 for a slow
+-// detent, up to 8 either way when turned fast.
++// detent, up to 8 either way when turned fast. Zero direction is an aux encoder click.
+ struct Turn { u8 slot, reserved; i16 direction; };
+ 
++// A note from a programmed instrument pattern, in
++// 96-PPQN ticks. This optional controller callback never edits the pattern.
++struct PatternEvent { u32 tick, length; u8 pitch, velocity; };
++struct PatternTiming { u32 cycle, phase; }; // Song ticks, phase at Input.transport.ticks96.
++using ReadPattern = bool (*)(u32 track, PatternEvent* events, u32 capacity,
++                            u32& count, PatternTiming& timing);
++
+ struct Input {
+     u32 track;  // the aux track this machine holds (zero-based)
+     // Each track's live values as stock sets them (sequenced, locked or
+@@ -86,6 +93,7 @@ struct Input {
+     // track turned keeps its turns between ticks.
+     u32 turn_count;
+     Turn turns[turn_capacity];
++    ReadPattern read_pattern; // nullptr in previews without a stock pattern source.
+ };
+ 
+ // What the machine returns each tick. An overlay entry for the machine's own
+diff --git a/sdk/platform/opxy-1.2.1/aux_tracks.cpp b/sdk/platform/opxy-1.2.1/aux_tracks.cpp
+index a75b7ea..9f452c0 100644
+--- a/sdk/platform/opxy-1.2.1/aux_tracks.cpp
++++ b/sdk/platform/opxy-1.2.1/aux_tracks.cpp
+@@ -552,6 +552,7 @@ i32 sdk_aux_page() {
+ // once on its next tick. Encoder clicks have already selected alternates in
+ // sdk_synth_press; consume them so CV cannot perform another action.
+ // 0 delegates; 1/2 return stock's page-key/click result (0/1) from the stub.
++void sdk_control_aux_click(u32 track, u32 slot);
+ u32 sdk_aux_key(u32 controller, const u32* event) {
+     const u32 track = byte(kSelectedTrack);
+     const ControlMachine* m = holder(track);
+@@ -563,7 +564,9 @@ u32 sdk_aux_key(u32 controller, const u32* event) {
+         sdk_synth_queue_page_key(track, key - 5);
+         return 1;
+     }
+-    return key >= 10 && key <= 13 && owns_page(track) ? 2 : 0;
++    if (key < 10 || key > 13 || !owns_page(track)) return 0;
++    sdk_control_aux_click(track, key - 10);
++    return 2;
+ }
+ 
+ // Before stock translates a tab to CV parameter indices. The SDK editor
+diff --git a/sdk/platform/opxy-1.2.1/track_control.cpp b/sdk/platform/opxy-1.2.1/track_control.cpp
+index 1178e20..bba6764 100644
+--- a/sdk/platform/opxy-1.2.1/track_control.cpp
++++ b/sdk/platform/opxy-1.2.1/track_control.cpp
+@@ -68,6 +68,7 @@
+ // Own turns: the turn hooks (synth_controls.cpp) offer each detent of a
+ // track's encoders to sdk_control_turn before stock's editor sees it.
+ #include "track_control.hpp"
++#include "note_container.hpp"
+ #include "stock.hpp"
+ #include "synth_controls.hpp"
+ #include "benchmark.hpp"
+@@ -282,6 +283,24 @@ void play_notes(u32 host) {
+ 
+ }
+ 
++static void queue_control_encoder(u32 track, u32 slot, opxy::i16 direction) {
++    if (turn_track != track) {
++        turn_track = track;
++        turn_count = 0;
++    }
++    if (turn_count < control::turn_capacity) {
++        control::Turn& turn = turns[turn_count++];
++        turn.slot = static_cast<u8>(slot);
++        turn.reserved = 0;
++        turn.direction = direction;
++    }
++}
++
++void sdk_control_aux_click(u32 track, u32 slot) {
++    if (track < control::all_tracks && owning[track] && slot < 4)
++        queue_control_encoder(track, slot, 0);
++}
++
+ extern "C" bool sdk_control_turn_offer(u32 track, u32 slot, const i32* event) {
+     if (track >= control::all_tracks || !owning[track] || slot >= kEngineControls) return false;
+     const i32 step = event ? event[0] : 0;
+@@ -292,16 +311,7 @@ extern "C" bool sdk_control_turn_offer(u32 track, u32 slot, const i32* event) {
+     i32 detents = event[1] < 0 ? -event[1] : event[1];
+     if (detents < 1) detents = 1;
+     if (detents > 8) detents = 8;
+-    if (turn_track != track) {
+-        turn_track = track;
+-        turn_count = 0;
+-    }
+-    if (turn_count < control::turn_capacity) {
+-        control::Turn& turn = turns[turn_count++];
+-        turn.slot = static_cast<u8>(slot);
+-        turn.reserved = 0;
+-        turn.direction = static_cast<opxy::i16>(step > 0 ? detents : -detents);
+-    }
++    queue_control_encoder(track, slot, static_cast<opxy::i16>(step > 0 ? detents : -detents));
+     return true;
+ }
+ 
+@@ -401,6 +411,48 @@ extern "C" void sdk_control_forget() {
+     release_all = held_count != 0;
+ }
+ 
++namespace {
++u32 song_ticks(u32 position, u32 rate, u32 stretch) {
++    const u32 divisor = 20 * rate;  // Stock uses 480 ticks/step; song time uses 24.
++    return (position * stretch + divisor / 2) / divisor;
++}
++
++bool read_control_pattern(u32 track, control::PatternEvent* events, u32 capacity,
++                          u32& count, control::PatternTiming& timing) {
++    if (track >= control::tracks || !events || capacity < notes::capacity ||
++        !word(0x840a0524) || word(kProjectLoading)) return false;
++    if (!stock<u32(u32)>(0x8d586014)(track)) return false;
++    const u32 steps = stock<u32(u32)>(0x8d586800)(track);
++    if (!steps || steps > 65535) return false;
++    const u32 scale = stock<u32(u32)>(0x8d586b50)(track);
++    if (scale >= 16) return false;
++    // The stock table describes track speed relative to the song clock.
++    const u32 rate = word(0x840a36e0 + scale * 8);
++    const u32 stretch = word(0x840a36e4 + scale * 8);
++    if (!rate || rate > 24 || 24 % rate || !stretch || stretch > 32) return false;
++    const auto* container = stock<const notes::Container*(u32, u32)>(0x8d5875c8)(track, 0);
++    bool used[notes::capacity];
++    if (!container || !notes::valid(*container, used)) return false;
++
++    const i32 length = static_cast<i32>(480 * steps);
++    const i32 position = stock<i32(u32, u32)>(0x8d592a94)(0x860c6adc, track) % length;
++    timing.cycle = song_ticks(length, rate, stretch);
++    timing.phase = song_ticks(position < 0 ? position + length : position, rate, stretch) % timing.cycle;
++    count = 0;
++    for (i32 slot = container->head; slot != -1; slot = container->slots[slot].next) {
++        const auto& n = container->slots[slot].note;
++        if (n.flags & notes::held_flag || !n.length || !n.velocity ||
++            n.velocity >= 128 || n.pitch >= 128 || n.position < -240 || n.position >= length) continue;
++        const u32 onset = static_cast<u32>(n.position < 0 ? n.position + length : n.position);
++        const u32 limit = 1536 * 20 * rate;
++        const u32 duration = song_ticks(n.length < limit ? n.length : limit, rate, stretch);
++        events[count++] = {song_ticks(onset, rate, stretch) % timing.cycle,
++                           duration ? duration : 1, n.pitch, n.velocity};
++    }
++    return true;
++}
++}
++
+ extern "C" void sdk_gui_tick() {
+     stock<void()>(0x8d580074)();
+     ++gui_ticks;
+@@ -483,6 +535,7 @@ extern "C" void sdk_gui_tick() {
+             for (u32 i = 0; i < applied_count; ++i)
+                 input.values[applied[i].track][applied[i].index] = applied[i].underlying;
+             input.transport = opxy::Transport{project_bpm_x10(), word(kTicks96), playing};
++            input.read_pattern = read_control_pattern;
+             loaded = true;
+         }
+         // The host's own controls as its page shows them, LFO included.

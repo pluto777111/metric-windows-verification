@@ -51,8 +51,16 @@ inline void edit_performance(Performance& p, const opxy::control::Input& in) {
     const auto& turn=in.turns[i];
     const unsigned knob=turn.slot%4;
     const auto detents=turn.direction;
+    if(!detents) {
+      if(p.page==2 && knob==1 && !in.shift) p.editing_octave=!p.editing_octave;
+      continue;
+    }
     if (p.page==4) {
       if (knob==0) p.anchor_cursor=adjust(p.anchor_cursor,detents,3);
+      if (p.editing_anchor_scale && knob==3) {
+        p.anchor_span=adjust(p.anchor_span-1,detents,15)+1;
+        continue;
+      }
       if (knob==1) {
         const unsigned bit=1u<<p.anchor_cursor;
         if(detents>0) p.anchor_mask|=bit;
@@ -71,20 +79,23 @@ inline void edit_performance(Performance& p, const opxy::control::Input& in) {
         if (knob==2) p.scale=adjust(p.scale,detents,scale_count-1);
         if (knob==3) p.source_mode=adjust(p.source_mode,detents,2);
       }
-    } else if (in.shift || turn.slot>=4) {
+    } else if (in.shift) {
       if (knob==0) p.interplay=adjust(p.interplay,detents,2);
       if (knob==1) p.destination=adjust(p.destination,detents,1);
       if (knob==2) p.journey=adjust(p.journey,detents,2);
       if (knob==3) p.pace=adjust(p.pace-1,detents,15)+1;
     } else {
       if (knob==0) p.distance=adjust(p.distance,detents*4,100);
-      if (knob==1) p.pitch_motion=adjust(p.pitch_motion,detents*4,100);
+      if (knob==1) {
+        if(p.editing_octave) p.octave=static_cast<int>(adjust(p.octave+2,detents,4))-2;
+        else p.pitch_motion=adjust(p.pitch_motion,detents*4,100);
+      }
       if (knob==2) p.freedom=adjust(p.freedom,detents*4,100);
       if (knob==3) p.tension=adjust(p.tension,detents*4,100);
     }
   }
 }
-inline void protect_programmed_notes(ControlState& st,const opxy::control::Input& in) {
+inline void protect_programmed_notes(ControlState& st,u32 index,const opxy::control::Input& in) {
   bool dropped[metric_core::MAX_EVENTS]{};
   unsigned checked=0;
   opxy::control::PatternEvent stock[120];
@@ -94,15 +105,18 @@ inline void protect_programmed_notes(ControlState& st,const opxy::control::Input
     if(checked&bit) continue;
     checked|=bit;
     u32 count=0;
-    if(!in.read_pattern(target,stock,120,count) || count>120) continue;
+    opxy::control::PatternTiming timing{};
+    if(!in.read_pattern(target,stock,120,count,timing) || count>120 || !timing.cycle) continue;
+    const unsigned cycle=timing.cycle;
+    const unsigned phase=pattern_phase_at_bar(timing,in.transport.ticks96,index);
     for(unsigned j=i;j<st.bar.count;++j) {
       const auto& event=st.bar.events[j];
       if(event.target!=target) continue;
       for(unsigned k=0;k<count;++k) {
         if(stock[k].pitch!=event.pitch) continue;
-        constexpr unsigned cycle=metric_core::BAR_TICKS;
-        const unsigned after_stock=(event.tick+cycle-stock[k].tick)%cycle;
-        const unsigned before_stock=(stock[k].tick+cycle-event.tick)%cycle;
+        const unsigned onset=(event.tick+phase)%cycle;
+        const unsigned after_stock=(onset+cycle-stock[k].tick)%cycle;
+        const unsigned before_stock=(stock[k].tick+cycle-onset)%cycle;
         if(!after_stock || after_stock<stock[k].length || before_stock<event.duration) {
           dropped[j]=true;
           break;
@@ -128,14 +142,16 @@ inline void ensure_bar(ControlState& st,u32 index,const opxy::control::Input& in
       if(st.settings.target_a!=st.settings.target_b) {
         opxy::control::PatternEvent notes[120];
         u32 count=0;
-        if(in.read_pattern(st.settings.target_a,notes,120,count) && count<=120)
-          render_programmed_phrase(p,st.settings,index,notes,count,st.bar,st.lanes);
+        opxy::control::PatternTiming timing{};
+        if(in.read_pattern(st.settings.target_a,notes,120,count,timing) && count<=120 && timing.cycle)
+          render_programmed_phrase(p,st.settings,index,notes,count,timing.cycle,
+              pattern_phase_at_bar(timing,in.transport.ticks96,index),st.bar,st.lanes);
       }
     } else if(p.source_mode==1) {
       render_shared_phrase(st.performance,st.settings,index,st.bar,st.lanes);
     }
   }
-  if(in.read_pattern) protect_programmed_notes(st,in);
+  if(in.read_pattern) protect_programmed_notes(st,index,in);
   st.current_bar=index;
   st.generated=1;
 }
@@ -155,6 +171,8 @@ inline void control_reset(ControlState& st) {
   st.performance.source_mode=0; st.performance.target_c=2; st.performance.target_d=3;
   st.performance.pitch_motion=0; st.performance.evolve=0; st.performance.anchor_cursor=0;
   st.performance.anchor_mask=9;
+  st.performance.octave=0; st.performance.anchor_span=1;
+  st.performance.editing_octave=false; st.performance.editing_anchor_scale=false;
   for(unsigned i=0;i<4;++i) st.performance.anchor_quality[i]=i==2 ? 1 : 0;
   auto& punch=st.performance.phrases.input.punch;
   for (auto& key : punch.keys) key=metric_punch::Key{};
@@ -180,7 +198,15 @@ inline void control(ControlState& st,const opxy::control::Input& in,opxy::contro
   update(st,in);
   // The previous callback decides which page owned any queued turns.
   if (st.performance.page>=2) edit_performance(st.performance,in);
-  if (in.page_key>=1 && in.page_key<=4) st.performance.page=in.page_key;
+  if (in.page_key>=1 && in.page_key<=4) {
+    auto& p=st.performance;
+    if(in.page_key==4 && p.page==4) p.editing_anchor_scale=!p.editing_anchor_scale;
+    if(in.page_key!=p.page) {
+      p.editing_octave=false;
+      p.editing_anchor_scale=false;
+    }
+    p.page=in.page_key;
+  }
   st.settings=effective_settings(st.performance,st.settings);
   const u32 now=in.transport.ticks96;
   overlay.own_turns=st.performance.page>=2;
@@ -227,12 +253,15 @@ inline void control(ControlState& st,const opxy::control::Input& in,opxy::contro
   overlay.display[8]=static_cast<i32>(in.transport.bpm_x10);
   overlay.display[9]=st.performance.page;
   const auto& p=st.performance;
-  overlay.display[10]=p.distance | p.pitch_motion<<8 | p.freedom<<16 | p.tension<<24;
+  overlay.display[10]=p.distance |
+    (p.editing_octave ? static_cast<unsigned>(p.octave+128) : p.pitch_motion)<<8 |
+    p.freedom<<16 | p.tension<<24;
   overlay.display[11]=p.interplay | p.destination<<8 | p.journey<<16 | p.pace<<24;
   overlay.display[12]=p.output | p.root<<8 | p.scale<<16 | p.source_mode<<24;
   overlay.display[13]=in.shift;
   overlay.display[14]=p.target_c | p.target_d<<8;
-  overlay.display[15]=p.anchor_cursor | ((p.anchor_mask>>p.anchor_cursor)&1u)<<8 |
-    static_cast<unsigned>(p.anchor_quality[p.anchor_cursor]+1)<<16 | p.evolve<<24;
+  overlay.display[15]=p.anchor_cursor | (p.anchor_span-1)<<2 | ((p.anchor_mask>>p.anchor_cursor)&1u)<<8 |
+    static_cast<unsigned>(p.anchor_quality[p.anchor_cursor]+1)<<16 |
+    (p.editing_anchor_scale ? 128+p.anchor_span : p.evolve)<<24;
 }
 }

@@ -2,8 +2,10 @@
 #include <cassert>
 
 static unsigned source_reads;
+static opxy::control::PatternTiming source_timing{384,0};
 static bool read_source(opxy::u32 track, opxy::control::PatternEvent* events,
-                        opxy::u32 capacity, opxy::u32& count) {
+                        opxy::u32 capacity, opxy::u32& count,
+                        opxy::control::PatternTiming& timing) {
   assert(capacity>=120);
   if(track!=0) return false;
   ++source_reads;
@@ -11,6 +13,7 @@ static bool read_source(opxy::u32 track, opxy::control::PatternEvent* events,
   events[1]={96,24,65,105};
   events[2]={192,48,67,80};
   count=3;
+  timing=source_timing;
   return true;
 }
 
@@ -62,10 +65,12 @@ int main() {
   input.turns[0].direction=5;
   control(state,input,overlay);
   assert(state.performance.distance==20 && state.bar.events[0].pitch==first.events[0].pitch);
-  input.turns[0].slot=7;
+  input.shift=1;
+  input.turns[0].slot=3;
   input.turns[0].direction=2;
   control(state,input,overlay);
   assert(state.performance.pace==3);
+  input.shift=0;
   input.turn_count=0;
   input.page_key=1;
   input.transport.ticks96=384;
@@ -108,6 +113,40 @@ int main() {
   assert(evolved_pitch(evolution,72,0,60)==72);
   assert(evolved_pitch(evolution,72,2,60)==60);
   assert(evolved_pitch(evolution,72,3,60)==72);
+  evolution.anchor_span=2;
+  assert(evolved_pitch(evolution,72,1,60)==72);
+  assert(evolved_pitch(evolution,72,2,60)==60);
+  assert(shifted_octave(60,1)==72 && shifted_octave(12,-2)==0);
+  assert(shifted_octave(121,2)==121);
+
+  ControlState controls{};
+  control_reset(controls);
+  opxy::control::Input edits{};
+  opxy::control::Overlay feedback{};
+  edits.track=11;
+  edits.page_key=2;
+  control(controls,edits,feedback);
+  edits.page_key=0;
+  edits.turn_count=2;
+  edits.turns[0]={1,0,0};
+  edits.turns[1]={1,0,1};
+  control(controls,edits,feedback);
+  assert(controls.performance.octave==1 && controls.performance.pitch_motion==0);
+  edits.shift=1;
+  edits.turn_count=1;
+  edits.turns[0]={0,0,1};
+  control(controls,edits,feedback);
+  assert(controls.performance.interplay==1 && controls.performance.distance==0);
+  edits.shift=0;
+  edits.turn_count=0;
+  edits.page_key=4;
+  control(controls,edits,feedback);
+  control(controls,edits,feedback);
+  edits.page_key=0;
+  edits.turn_count=1;
+  edits.turns[0]={3,0,2};
+  control(controls,edits,feedback);
+  assert(controls.performance.anchor_span==3 && controls.performance.evolve==0);
 
   metric_core::Bar collisions{};
   uint8_t lanes[metric_core::MAX_EVENTS]{};
@@ -146,8 +185,29 @@ int main() {
   append_performance_event(live.bar,live.lanes,{0,0,60,80,24},0,false);
   append_performance_event(live.bar,live.lanes,{8,0,60,80,8},0,true);
   append_performance_event(live.bar,live.lanes,{0,0,61,80,24},0,false);
-  protect_programmed_notes(live,context);
+  protect_programmed_notes(live,1,context);
   assert(live.bar.count==1 && live.bar.events[0].pitch==61);
 
+  // An uneven, longer cycle follows the source playhead through bar windows.
+  Performance tracked{};
+  metric_core::Settings source_settings{0,50,0,1,0,1,36,42,0,1};
+  const opxy::control::PatternEvent long_notes[]={{0,48,60,90},{432,48,64,90}};
+  metric_core::Bar window{};
+  assert(pattern_phase_at_bar({504,391},391,1)==384);
+  render_programmed_phrase(tracked,source_settings,1,long_notes,2,504,384,window,lanes);
+  assert(window.count==2 && window.events[0].tick==48 && window.events[1].tick==120);
 
+  // A short scaled loop repeats within a single METRIC bar.
+  const opxy::control::PatternEvent short_note{16,8,60,90};
+  window.count=0;
+  render_programmed_phrase(tracked,source_settings,0,&short_note,1,96,24,window,lanes);
+  assert(window.count==4 && window.events[0].tick==88 && window.events[3].tick==376);
+
+  // Same-pitch collisions use the destination pattern's own phase and wrap.
+  source_timing={504,500};
+  live.bar.count=0;
+  append_performance_event(live.bar,live.lanes,{0,0,60,80,8},0,false);
+  append_performance_event(live.bar,live.lanes,{0,0,61,80,8},0,false);
+  protect_programmed_notes(live,1,context);
+  assert(live.bar.count==1 && live.bar.events[0].pitch==61);
 }

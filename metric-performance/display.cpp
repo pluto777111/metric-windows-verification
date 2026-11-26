@@ -51,13 +51,14 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
     const unsigned bank=opxy::control::from_control(word);
     const unsigned knob[4]={bank&255,(bank>>8)&255,(bank>>16)&255,bank>>24};
     for(unsigned i=0;i<8;++i) { names[i]=""; values[i][0]=0; }
-    const unsigned slot=shifted ? 4 : 0;
     if(page==4) {
-      names[slot]="bar"; names[slot+1]="pin"; names[slot+2]="quality"; names[slot+3]="evolve";
-      number(values[slot],knob[0]+1);
-      copy(values[slot+1],header_capacity,knob[1] ? "ON" : "OFF");
-      copy(values[slot+2],header_capacity,qualities[knob[2]%3]);
-      number(values[slot+3],knob[3]);
+      const bool scaling=knob[3]>=128;
+      const unsigned span=1+(knob[0]>>2);
+      names[0]="bar"; names[1]="pin"; names[2]="quality"; names[3]=scaling ? "bar scale" : "evolve";
+      number(values[0],1+(knob[0]&3)*span);
+      copy(values[1],header_capacity,knob[1] ? "ON" : "OFF");
+      copy(values[2],header_capacity,qualities[knob[2]%3]);
+      number(values[3],scaling ? span : knob[3]);
     } else if(page==3 && shifted) {
       names[4]="track C"; names[5]="track D";
       number(values[4],knob[0]+1);
@@ -69,14 +70,19 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
       copy(values[2],header_capacity,scales[knob[2]%16]);
       copy(values[3],header_capacity,sources[knob[3]%3]);
     } else if(shifted) {
-      names[4]="interplay"; names[5]="dest"; names[6]="journey"; names[7]="pace";
-      copy(values[4],header_capacity,interplay[knob[0]%3]);
-      copy(values[5],header_capacity,knob[1] ? "ANCHOR" : "HOME");
-      copy(values[6],header_capacity,journeys[knob[2]%3]);
-      number(values[7],knob[3]);
+      names[0]="interplay"; names[1]="dest"; names[2]="journey"; names[3]="pace";
+      copy(values[0],header_capacity,interplay[knob[0]%3]);
+      copy(values[1],header_capacity,knob[1] ? "ANCHOR" : "HOME");
+      copy(values[2],header_capacity,journeys[knob[2]%3]);
+      number(values[3],knob[3]);
     } else {
       names[0]="rhythm"; names[1]="pitch"; names[2]="scatter"; names[3]="tension";
       for(unsigned i=0;i<4;++i) number(values[i],knob[i]);
+      if(knob[1]>=126 && knob[1]<=130) {
+        static const char* const octaves[]={"-2","-1","0","+1","+2"};
+        names[1]="octave";
+        copy(values[1],header_capacity,octaves[knob[1]-126]);
+      }
     }
   }
   page_header(state.header,input,frame,names,values,0);
