@@ -537,10 +537,10 @@ index 0000000..7806df9
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..b0b440a
+index 0000000..b86aaed
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,376 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
@@ -646,16 +646,35 @@ index 0000000..b0b440a
 +    void process(i32* sum, const Controls& controls) {
 +        const bool matching = controls.level_match != 0;
 +        bool silent = true;
++        bool mono = !stereo_seen_;
 +        i64 dry_power = 0;
-+        for (u32 i = 0; i < 2 * opxy::block_frames; ++i) {
-+            silent = silent && sum[i] == 0;
-+            if (matching) dry_power += meter_square(sum[i] >> 16);
++        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
++            const i32 left = sum[2 * frame], right = sum[2 * frame + 1];
++            mono = mono && left == right;
++            silent = silent && left == 0 && right == 0;
++            if (matching) dry_power += meter_square(left >> 16) + meter_square(right >> 16);
 +        }
 +        if (!silent) silent_blocks_ = 0;
 +        else if (++silent_blocks_ >= tail_blocks) {
 +            for (u32 i = 0; i < 2 * opxy::block_frames; ++i) sum[i] = 0;
 +            return;
 +        }
++        if (mono) {
++            process_channels<1>(sum, controls, dry_power);
++            return;
++        }
++        if (!stereo_seen_) {
++            // Restore the other channel's filter history when the input first
++            // differs. Resume mono only after both channels reset together.
++            split_[1] = split_[0];
++            stereo_seen_ = true;
++        }
++        process_channels<2>(sum, controls, dry_power);
++    }
++
++private:
++    template <u32 channels>
++    void process_channels(i32* sum, const Controls& controls, i64 dry_power) {
 +        static constexpr Curve curves[] = {
 +            {-3015777,-2551978,3618,32768,1187246,131072,49012,919785,2352808,-1720975,
 +             120468,-79576,24645,63248,2067,221,15274,faust_tables::release_low_q22},
@@ -682,18 +701,21 @@ index 0000000..b0b440a
 +        i64 peak = 0;
 +        i64 wet_power = 0;
 +        // Ignore blocks below approximately -60 dBFS RMS, including tails.
++        const bool matching = controls.level_match != 0;
 +        const bool meter_active = matching && dry_power >= 138000;
 +        i64 output[2 * opxy::block_frames];
 +        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
 +            i32 stereo[2][3];
-+            for (u32 ch = 0; ch < 2; ++ch)
++            for (u32 ch = 0; ch < channels; ++ch)
 +                split_[ch].tick(q31::shift_right(sum[2 * frame + ch], 3), stereo[ch]);
 +
 +            i64 wet[2] = {};
 +            for (u32 band = 0; band < 3; ++band) {
 +                auto& state = bands_[band];
 +                const auto& curve = curves[band];
-+                const i64 power = (square(stereo[0][band]) + square(stereo[1][band])) >> 13;
++                const i64 left_power = square(stereo[0][band]);
++                const i64 power = channels == 1 ? left_power >> 12
++                    : (left_power + square(stereo[1][band])) >> 13;
 +                const i64 delta = power - state.envelope;
 +                const i32 coefficient = delta > 0 ? curve.attack : release[band];
 +                // Split the Q22 multiply into two native 32×32 products.
@@ -704,10 +726,10 @@ index 0000000..b0b440a
 +                    (q31::wide(fraction, coefficient) >> 22);
 +                if (!(frame & (gain_period - 1))) {
 +                    // Recompute at each block boundary so knob and Level Match
-+                    // changes apply immediately. Within the block, a 1/128
-+                    // change in envelope power is about 0.034 dB.
++                    // changes apply immediately. Within the block, a 1/32
++                    // change in envelope power is about 0.14 dB.
 +                    const i64 difference = state.envelope - state.gain_envelope;
-+                    const i64 tolerance = state.gain_envelope >> 7;
++                    const i64 tolerance = state.gain_envelope >> 5;
 +                    if (!frame || difference < -tolerance || difference > tolerance) {
 +                        state.gain_envelope = state.envelope;
 +                        const i32 db = level_db(state.envelope);
@@ -725,13 +747,14 @@ index 0000000..b0b440a
 +                    }
 +                }
 +                state.gain += state.step;
-+                for (u32 ch = 0; ch < 2; ++ch)
++                for (u32 ch = 0; ch < channels; ++ch)
 +                    wet[ch] += q31::wide(stereo[ch][band], state.gain) >> 22;
 +            }
-+            for (u32 ch = 0; ch < 2; ++ch) {
++            for (u32 ch = 0; ch < channels; ++ch) {
 +                const i64 sample = wet[ch];
 +                output[2 * frame + ch] = sample;
-+                if (meter_active) wet_power += meter_square(sample >> 10);
++                if (meter_active)
++                    wet_power += (channels == 1 ? 2 : 1) * meter_square(sample >> 10);
 +                const i64 magnitude = sample < 0 ? -sample : sample;
 +                if (magnitude > peak) peak = magnitude;
 +            }
@@ -741,16 +764,18 @@ index 0000000..b0b440a
 +        const i32 limit = peak_limit(peak);
 +        if (limiter_ < limit) limiter_ += (limit - limiter_) / 4 + 1;
 +        else limiter_ = limit;
-+        for (u32 i = 0; i < 2 * opxy::block_frames; ++i) {
-+            sum[i] = q31::shift_left(apply_limit(output[i], limiter_), 6);
++        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
++            for (u32 ch = 0; ch < channels; ++ch)
++                sum[2 * frame + ch] = q31::shift_left(apply_limit(output[2 * frame + ch], limiter_), 6);
++            if (channels == 1) sum[2 * frame + 1] = sum[2 * frame];
 +        }
 +    }
 +
-+private:
 +    static constexpr u32 tail_blocks = 128;
 +    Split split_[2];
 +    Band bands_[3];
 +    u32 silent_blocks_ = 0;
++    bool stereo_seen_ = false;
 +    bool initialized_ = false;
 +    i32 limiter_ = q31::maximum;
 +    i32 match_db_ = 0;

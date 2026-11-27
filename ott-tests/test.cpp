@@ -237,6 +237,27 @@ void test_limiter() {
     require(reached_ceiling, "The limiter test must actually hit the ceiling");
 }
 
+void test_mono_transition(bool matching) {
+    ott::Processor adaptive, stereo;
+    ott::Controls controls;
+    controls.level_match = matching ? full : 0;
+    for (unsigned block = 0; block < 768; ++block) {
+        Block input{};
+        for (unsigned i = 0; i < opxy::block_frames; ++i) {
+            const double phase = 6.283185307179586 * 230. * (block * opxy::block_frames + i) / 44100.;
+            input[2 * i] = static_cast<opxy::i32>(full * .09 * std::sin(phase));
+            input[2 * i + 1] = block < 384 ? input[2 * i] :
+                static_cast<opxy::i32>(full * .08 * std::sin(4.5 * phase + .7));
+        }
+        Block always_stereo = input;
+        // Force the stereo path with a bit below both internal input shifts.
+        if (!block) always_stereo[1] ^= 1;
+        adaptive.process(input.data(), controls);
+        stereo.process(always_stereo.data(), controls);
+        require(input == always_stereo, "Mono processing and the change to stereo must match the full path");
+    }
+}
+
 void test_level_match(double hz, double amplitude, bool pulses, const ott::Controls& auto_controls) {
     ott::TrackInserts matched;
     ott::TrackSettings settings[ott::TrackInserts::track_count]{};
@@ -342,6 +363,8 @@ int main() {
     auto_controls.depth = full / 4;
     auto_controls.low_trim = (full / 5) * 4;
     test_level_match(34., .025, true, auto_controls);
+    test_mono_transition(false);
+    test_mono_transition(true);
     test_limiter();
     test_track_inserts(input);
     test_device_controls(input);
