@@ -157,7 +157,7 @@
     "sharedBytes": 0,
     "outputPeakQ31": 1073741824,
     "display": {
-      "stateBytes": 8724,
+      "stateBytes": 20,
       "stateAlignment": 4,
       "paths": 0,
       "points": 0,
@@ -166,7 +166,7 @@
       "palette": 16
     },
     "trackControl": {
-      "stateBytes": 8720,
+      "stateBytes": 8724,
       "stateAlignment": 4,
       "unique": true,
       "aux": [
