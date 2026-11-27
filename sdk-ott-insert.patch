@@ -168,10 +168,10 @@ index 0000000..55d1953
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..f7780f0
+index 0000000..ec7d663
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,142 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
@@ -226,9 +226,7 @@ index 0000000..f7780f0
 +        if (!open_ || encoder >= 4 || shifted) return InputResult::stock;
 +        if (encoder == 3) return set_enabled(!project_.track[track_].enabled);
 +        auto& position = shown_[track_][encoder];
-+        const u32 count = encoder == 2 ? 3 : 2;
-+        const u32 next = static_cast<u32>(position) + 1;
-+        position = next == count ? 0 : static_cast<opxy::u8>(next);
++        position = !position;
 +        return InputResult::page_changed;
 +    }
 +
@@ -285,10 +283,10 @@ index 0000000..f7780f0
 +    };
 +
 +    Binding binding(u32 encoder) const {
-+        static constexpr Binding controls[3][3] = {
++        static constexpr Binding controls[3][2] = {
 +            {{"Time", &Controls::time}, {"Level Match", &Controls::level_match}},
 +            {{"Low", &Controls::low_trim}, {"Upward", &Controls::upward}},
-+            {{"High", &Controls::high_trim}, {"Downward", &Controls::downward}, {"Mid Trim", &Controls::mid_trim}},
++            {{"High", &Controls::high_trim}, {"Downward", &Controls::downward}},
 +        };
 +        if (encoder == 3) return {"Depth", &Controls::depth};
 +        return controls[encoder][shown_[track_][encoder]];
@@ -392,17 +390,17 @@ index 0000000..d765147
 +}}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
 new file mode 100644
-index 0000000..fbfd246
+index 0000000..7806df9
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,141 @@
 +#pragma once
 +#include "device_controls.hpp"
 +
 +namespace ott {
 +constexpr i32 Controls::* parameters[] = {
 +    &Controls::depth, &Controls::time, &Controls::low_trim, &Controls::high_trim,
-+    &Controls::upward, &Controls::downward, &Controls::mid_trim, &Controls::level_match
++    &Controls::upward, &Controls::downward, &Controls::level_match
 +};
 +constexpr u32 parameter_count = sizeof(parameters) / sizeof(parameters[0]);
 +constexpr u32 project_bytes = 1 + TrackInserts::track_count * (1 + 4 * parameter_count);
@@ -410,7 +408,7 @@ index 0000000..fbfd246
 +using Byte = unsigned char;
 +
 +inline u32 encode_project(const ProjectSettings& project, Byte* data) {
-+    data[0] = 4;
++    data[0] = 5;
 +    u32 at = 1;
 +    for (const auto& track : project.track) {
 +        data[at++] = track.enabled;
@@ -425,18 +423,23 @@ index 0000000..fbfd246
 +inline bool decode_project(const Byte* data, u32 count, ProjectSettings& project) {
 +    // The earlier compressor used different parameters. Opening those
 +    // projects starts OTT bypassed at the Faust defaults.
-+    if (!data || count != project_bytes || (data[0] != 3 && data[0] != 4)) return false;
++    if (!data || !count || data[0] < 3 || data[0] > 5) return false;
++    const bool had_mid_trim = data[0] < 5;
 +    const bool manual_trim = data[0] == 3;
++    const u32 slots = parameter_count + had_mid_trim;
++    if (count != 1 + TrackInserts::track_count * (1 + 4 * slots)) return false;
 +    ProjectSettings next{};
 +    u32 at = 1, enabled = 0;
 +    for (auto& track : next.track) {
 +        if (data[at] > 1) return false;
 +        track.enabled = data[at++] != 0;
 +        enabled += track.enabled;
-+        for (auto parameter : parameters) {
++        for (u32 slot = 0; slot < slots; ++slot) {
 +            u32 value = 0;
 +            for (u32 byte = 0; byte < 4; ++byte) value |= static_cast<u32>(data[at++]) << (8 * byte);
 +            if (value > static_cast<u32>(q31::maximum)) return false;
++            if (had_mid_trim && slot == 6) continue;
++            const auto parameter = parameters[had_mid_trim && slot > 6 ? slot - 1 : slot];
 +            if (parameter == &Controls::level_match) {
 +                if (manual_trim) continue;
 +                if (value && value != static_cast<u32>(q31::maximum)) return false;
@@ -534,10 +537,10 @@ index 0000000..fbfd246
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..9d75cbf
+index 0000000..b0b440a
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,316 @@
+@@ -0,0 +1,351 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
@@ -561,54 +564,59 @@ index 0000000..9d75cbf
 +    i32 high_trim = q31::maximum / 2;
 +    i32 upward = q31::maximum / 2;
 +    i32 downward = q31::maximum / 2;
-+    i32 mid_trim = q31::maximum / 2;
 +    i32 level_match = q31::maximum;
 +};
 +
 +class Processor {
 +    static constexpr i32 db_unit = 1 << 16;
-+    // Keep the audio and detectors at full rate. Interpolate the gain
-+    // between curve evaluations, about every 0.36 ms at 44.1 kHz.
-+    static constexpr i32 gain_period = 16;
++    // Keep the installed build's gain timing around transients.
++    static constexpr i32 gain_period = 4;
 +
 +    struct Coefficients {
-+        i32 g_q31, damp_q30, normalizer_q31;
++        i32 g_q31, damping_q31, input_q31;
 +    };
 +
-+    // The Q28 integrators keep quiet crossover leakage below the upward
-+    // compression floor. One SVF provides both sides of the first stage.
++    // Rearrange the SVF integrators so the lowpass and bandpass need only
++    // three multiplies. The Q28 state protects quiet-band precision.
 +    struct Filter {
 +        i32 integrator1 = 0, integrator2 = 0;
-+        i32 tick(i32 x, const Coefficients& c, i32& low, i32& high) {
-+            const i32 reduced = x - integrator2 - 2 * rounded(c.damp_q30, integrator1);
-+            const i32 hp = rounded(c.normalizer_q31, reduced);
-+            const i32 feed1 = rounded(c.g_q31, hp);
-+            const i32 band = integrator1 + feed1;
-+            const i32 feed2 = rounded(c.g_q31, band);
-+            low = integrator2 + feed2;
-+            high = hp;
-+            integrator1 = band + feed1;
-+            integrator2 = low + feed2;
++        i32 tick(i32 input, const Coefficients& coefficients, i32& low) {
++            const i32 delta1 = rounded(coefficients.input_q31, input - integrator2) -
++                               rounded(coefficients.damping_q31, integrator1);
++            const i32 band = integrator1 + delta1;
++            const i32 delta2 = rounded(coefficients.g_q31, band);
++            low = integrator2 + delta2;
++            integrator1 = band + delta1;
++            integrator2 = low + delta2;
 +            return band;
 +        }
 +    };
 +
 +    struct Split {
-+        Filter lower[3], upper[3], phase;
++        Filter lower[2], upper[2], phase;
 +        void tick(i32 input, i32 (&bands)[3]) {
-+            constexpr Coefficients lower_coeff{13508514, 1525254507, 2128464695};
-+            constexpr Coefficients upper_coeff{386551232, 1711775866, 1668645873};
++            constexpr Coefficients lower_coeff{13508514, 19018953, 13388877};
++            constexpr Coefficients upper_coeff{386551232, 478837775, 300359502};
++            i32 lower_low;
++            const i32 lower_mid = lower[0].tick(input, lower_coeff, lower_low);
++            lower[1].tick(lower_low, lower_coeff, lower_low);
++            // The LR4 outputs sum to the first section's allpass response.
++            // Find the high branch by subtraction and share both SVF stages.
++            const i32 rest = allpass(input, lower_mid) - lower_low;
++
++            i32 upper_low;
++            const i32 upper_mid = upper[0].tick(rest, upper_coeff, upper_low);
++            upper[1].tick(upper_low, upper_coeff, bands[1]);
++            bands[2] = allpass(rest, upper_mid) - bands[1];
++
++            i32 unused_low;
++            const i32 phase_band = phase.tick(lower_low, upper_coeff, unused_low);
++            bands[0] = allpass(lower_low, phase_band);
++        }
++
++        static i32 allpass(i32 input, i32 band) {
 +            constexpr i32 sqrt_two_q30 = 1518500250;
-+            i32 low, rest, middle, high, unused_a, unused_b;
-+            lower[0].tick(input, lower_coeff, low, rest);
-+            lower[1].tick(low, lower_coeff, low, unused_a);
-+            lower[2].tick(rest, lower_coeff, unused_a, rest);
-+            // Match the phase shift caused by the second crossover.
-+            const i32 phase_band = phase.tick(low, upper_coeff, unused_a, unused_b);
-+            bands[0] = low - 4 * rounded(sqrt_two_q30, phase_band);
-+            upper[0].tick(rest, upper_coeff, middle, high);
-+            upper[1].tick(middle, upper_coeff, bands[1], unused_a);
-+            upper[2].tick(high, upper_coeff, unused_a, bands[2]);
++            return input - 4 * rounded(sqrt_two_q30, band);
 +        }
 +    };
 +
@@ -622,6 +630,7 @@ index 0000000..9d75cbf
 +
 +    struct Band {
 +        i64 envelope = 0; // stereo mean power, Q44
++        i64 gain_envelope = 0;
 +        i32 gain = 0, step = 0;
 +    };
 +
@@ -656,7 +665,7 @@ index 0000000..9d75cbf
 +             120875,-80428,25090,63757,3787,-2008,9836,faust_tables::release_high_q22},
 +        };
 +        const i32 added_db = match_db_ - q31::multiply(controls.depth, 6 * db_unit);
-+        const i32 trims[] = {trim_db(controls.low_trim) + added_db, trim_db(controls.mid_trim) + added_db,
++        const i32 trims[] = {trim_db(controls.low_trim) + added_db, added_db,
 +                             trim_db(controls.high_trim) + added_db};
 +        i32 rise[3], fall[3], fixed_db[3], release[3];
 +        const i32 downward = down_strength(controls.downward);
@@ -686,18 +695,34 @@ index 0000000..9d75cbf
 +                const auto& curve = curves[band];
 +                const i64 power = (square(stereo[0][band]) + square(stereo[1][band])) >> 13;
 +                const i64 delta = power - state.envelope;
-+                state.envelope += (delta * (delta > 0 ? curve.attack : release[band])) >> 22;
++                const i32 coefficient = delta > 0 ? curve.attack : release[band];
++                // Split the Q22 multiply into two native 32×32 products.
++                // The arithmetic shift and low bits make this exact for negative deltas too.
++                const i32 whole = static_cast<i32>(delta >> 22);
++                const i32 fraction = static_cast<i32>(delta) & ((1 << 22) - 1);
++                state.envelope += q31::wide(whole, coefficient) +
++                    (q31::wide(fraction, coefficient) >> 22);
 +                if (!(frame & (gain_period - 1))) {
-+                    const i32 db = level_db(state.envelope);
-+                    const i32 up = mul_q16(rise[band],
-+                        soft_hinge(curve.up_threshold - db, curve.up_width, curve.inv_up_width));
-+                    const i32 down = mul_q16(fall[band],
-+                        soft_hinge(db - curve.down_threshold, curve.down_width, curve.inv_down_width));
-+                    const i32 gain_db = max(curve.floor, fixed_db[band] + min(curve.cap, up) - down) +
-+                        trims[band];
-+                    const i32 next = gain_linear(gain_db);
-+                    if (!initialized_ && frame == 0) state.gain = next;
-+                    state.step = (next - state.gain) / gain_period;
++                    // Recompute at each block boundary so knob and Level Match
++                    // changes apply immediately. Within the block, a 1/128
++                    // change in envelope power is about 0.034 dB.
++                    const i64 difference = state.envelope - state.gain_envelope;
++                    const i64 tolerance = state.gain_envelope >> 7;
++                    if (!frame || difference < -tolerance || difference > tolerance) {
++                        state.gain_envelope = state.envelope;
++                        const i32 db = level_db(state.envelope);
++                        const i32 up = mul_q16(rise[band],
++                            soft_hinge(curve.up_threshold - db, curve.up_width, curve.inv_up_width));
++                        const i32 down = mul_q16(fall[band],
++                            soft_hinge(db - curve.down_threshold, curve.down_width, curve.inv_down_width));
++                        const i32 gain_db = max(curve.floor, fixed_db[band] + min(curve.cap, up) - down) +
++                            trims[band];
++                        const i32 next = gain_linear(gain_db);
++                        if (!initialized_ && frame == 0) state.gain = next;
++                        state.step = (next - state.gain) / gain_period;
++                    } else {
++                        state.step = 0;
++                    }
 +                }
 +                state.gain += state.step;
 +                for (u32 ch = 0; ch < 2; ++ch)
@@ -756,7 +781,7 @@ index 0000000..9d75cbf
 +            // Reuse the band gain stages for correction before the limiter.
 +            constexpr i32 max_step = db_unit / 8;
 +            const i32 error = level_db(dry_meter_) - level_db(wet_meter_);
-+            const i32 step = max(-max_step, min(max_step, error / 12));
++            const i32 step = max(-max_step, min(max_step, q31::multiply(error, 178956971)));
 +            match_db_ = max(-12 * db_unit, min(12 * db_unit, match_db_ + step));
 +        }
 +        metered_blocks_ = 0;
@@ -807,7 +832,7 @@ index 0000000..9d75cbf
 +        if (!energy) return -200 * db_unit;
 +        const u32 hi = static_cast<u32>(energy >> 32);
 +        const u32 word = hi ? hi : static_cast<u32>(energy);
-+        const u32 shift = static_cast<u32>(__builtin_clz(word));
++        const u32 shift = leading_zeros(word);
 +        const u32 low = static_cast<u32>(energy);
 +        const u32 normalized = hi ? (hi << shift) | (low >> (32 - shift)) : low << shift;
 +        const u32 index = (normalized >> 26) & 31u;
@@ -816,6 +841,19 @@ index 0000000..9d75cbf
 +        const i32 octave = (hi ? 63 : 31) - static_cast<i32>(shift) - 44;
 +        return mul_q16(197283, octave * db_unit + table[index] +
 +                       mul_q16(table[index + 1] - table[index], fraction));
++    }
++    static u32 leading_zeros(u32 word) {
++#if defined(__bfin__)
++        // The unsigned shift inserts a leading sign bit. SIGNBITS counts
++        // the remaining leading zeros, including the word == 1 case.
++        u32 result;
++        const u32 positive = word >> 1;
++        __asm__("%0.L = SIGNBITS %1;\n\t%0 = %0.L (Z);"
++                : "=d"(result) : "d"(positive) : "ASTAT");
++        return result;
++#else
++        return static_cast<u32>(__builtin_clz(word));
++#endif
 +    }
 +    static i32 gain_linear(i32 db) {
 +        const i32 octave = mul_q16(db, 10885);

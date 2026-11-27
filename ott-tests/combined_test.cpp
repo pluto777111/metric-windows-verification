@@ -91,10 +91,18 @@ int main() {
     assert(!ott::decode_project(legacy_v1, sizeof legacy_v1, defaults));
     assert(!ott::decode_project(legacy_v2, sizeof legacy_v2, defaults));
     assert(!defaults.track[0].enabled && defaults.track[0].controls.depth == ott::q31::maximum);
-    std::memcpy(roundtrip, bytes, sizeof bytes);
-    roundtrip[0] = 3;
+    constexpr u32 shared = 1 + 4 * 6;
+    constexpr u32 current_track_bytes = 1 + 4 * ott::parameter_count;
+    constexpr u32 old_track_bytes = current_track_bytes + 4;
+    ott::Byte legacy_v3[1 + ott::TrackInserts::track_count * old_track_bytes] = {3};
+    for (u32 track = 0; track < ott::TrackInserts::track_count; ++track) {
+        const auto* from = bytes + 1 + track * current_track_bytes;
+        auto* to = legacy_v3 + 1 + track * old_track_bytes;
+        std::memcpy(to, from, shared);
+        std::memcpy(to + shared + 4, from + shared, 4);
+    }
     ott::ProjectSettings migrated{};
-    assert(ott::decode_project(roundtrip, sizeof roundtrip, migrated));
+    assert(ott::decode_project(legacy_v3, sizeof legacy_v3, migrated));
     assert(migrated.track[0].enabled == restored.track[0].enabled &&
            migrated.track[0].controls.depth == restored.track[0].controls.depth &&
            migrated.track[0].controls.high_trim == restored.track[0].controls.high_trim &&

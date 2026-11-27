@@ -153,6 +153,11 @@ void test_device_controls(const Block& input) {
             std::strcmp(panel.encoders[1].label, "Upward") == 0 &&
             std::strcmp(panel.encoders[2].label, "Downward") == 0 && !panel.enabled,
             "A refinement click must switch only its own encoder");
+    require(controller.click(0, false) == InputResult::page_changed &&
+            controller.click(2, false) == InputResult::page_changed &&
+            controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Time") == 0 &&
+            std::strcmp(panel.encoders[2].label, "High") == 0,
+            "A second click must return to the main control without opening another choice");
     require(controller.turn(1, false, 127, 3) == InputResult::settings_changed &&
             controller.project().track[0].controls.upward == full,
             "Large turns must clamp without overflow");
@@ -304,7 +309,7 @@ int main() {
         controls.time = n & 4 ? full : 0;
         controls.upward = n & 8 ? full : 0;
         controls.downward = n & 16 ? full : 0;
-        controls.low_trim = controls.mid_trim = controls.high_trim = n & 32 ? full : 0;
+        controls.low_trim = controls.high_trim = n & 32 ? full : 0;
         controls.level_match = n & 64 ? full : 0;
         processor.process(output.data(), controls);
         for (const auto sample : output)
