@@ -1,0 +1,48 @@
+diff --git a/sdk/include/opxy/q31.hpp b/sdk/include/opxy/q31.hpp
+index e300521..1210f45 100644
+--- a/sdk/include/opxy/q31.hpp
++++ b/sdk/include/opxy/q31.hpp
+@@ -32,6 +32,28 @@ inline i32 multiply(i32 a, i32 b) {
+ #endif
+ }
+ 
++// The Q31 product rounded to nearest, (a * b + 2^30) >> 31, with exact halves
++// rounded to even and MIN * MIN held at maximum.
++inline i32 multiply_rounded(i32 a, i32 b) {
++#if defined(__bfin__)
++    // Blackfin+'s 32 x 32 fractional multiply in its default rounding mode:
++    // one instruction (unbiased rounding with ASTAT.RND_MOD clear).
++    i32 result;
++    __asm__("%0 = %1 * %2;" : "=d"(result) : "d"(a), "d"(b) : "ASTAT", "CC");
++    return result;
++#else
++    if (a == -maximum - 1 && b == -maximum - 1) return maximum;
++    const i64 product = static_cast<i64>(a) * b;
++    const i64 scale = static_cast<i64>(1) << 31;
++    i64 floor = product / scale;
++    i64 remainder = product % scale;
++    if (remainder < 0) { --floor; remainder += scale; }
++    const i64 half = scale / 2;
++    if (remainder > half || (remainder == half && (floor & 1))) ++floor;
++    return static_cast<i32>(floor);
++#endif
++}
++
+ // Saturating addition (SDK 1.7): the sum, held within the Q31 range.
+ inline i32 add(i32 a, i32 b) {
+ #if defined(__bfin__)
+diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
+index 4da0425..59b8c43 100644
+--- a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
++++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
+@@ -390,7 +390,9 @@ private:
+     static i32 max(i32 a, i32 b) { return a > b ? a : b; }
+     static i32 mul_q16(i32 a, i32 b) { return static_cast<i32>(q31::wide(a, b) >> 16); }
+     static i32 rounded(i32 coefficient, i32 sample) {
+-        return static_cast<i32>((q31::wide(coefficient, sample) + (1 << 30)) >> 31);
++        // One rounded fractional multiply on the device, instead of a 64-bit
++        // product, add and shift.
++        return q31::multiply_rounded(coefficient, sample);
+     }
+     static i64 square(i32 x) {
+         constexpr i32 bound = 4 << 28;
