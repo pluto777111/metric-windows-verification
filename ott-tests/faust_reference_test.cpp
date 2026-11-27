@@ -33,6 +33,7 @@ bool compare(double hz, double amplitude, double depth, double time_position,
     map.setParamValue("Upward", up);
     map.setParamValue("Downward", down);
     ott::Controls controls;
+    controls.character = ott::Drum;
     controls.level_match = 0;
     controls.depth = encode(depth);
     controls.time = encode(time_position);

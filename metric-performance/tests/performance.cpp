@@ -2,12 +2,6 @@
 #include <cassert>
 
 static unsigned source_reads;
-static opxy::i32 written_routes[2];
-static bool save_route(opxy::u32 track,opxy::u32 slot,opxy::i32 value) {
-  assert(track==11 && (slot==6 || slot==7));
-  written_routes[slot-6]=value;
-  return true;
-}
 static opxy::control::PatternTiming source_timing{384,0};
 static bool read_source(opxy::u32 track, opxy::control::PatternEvent* events,
                         opxy::u32 capacity, opxy::u32& count,
@@ -159,7 +153,6 @@ int main() {
   control(controls,edits,feedback);
   edits.page_key=0;
   edits.shift=1;
-  edits.set_own_parameter=save_route;
   edits.turn_count=4;
   for(unsigned i=0;i<4;++i) edits.turns[i]={static_cast<opxy::u8>(i),0,1};
   control(controls,edits,feedback);
@@ -167,11 +160,9 @@ int main() {
   edits.shift=0;
   edits.turn_count=0;
   control(controls,edits,feedback);
-  assert(decode(written_routes[0],8)==1 && decode(written_routes[1],8)==1);
+  assert(controls.values[6]==0 && controls.values[7]==0);
   assert(controls.settings.target_a==1 && controls.settings.target_b==1);
   assert(controls.performance.target_c==3 && controls.performance.target_d==4);
-  edits.values[11][6]=written_routes[0];
-  edits.values[11][7]=written_routes[1];
   edits.shift=0;
   edits.turn_count=3;
   edits.turns[0]={0,0,0};
@@ -188,7 +179,7 @@ int main() {
   edits.page_key=3;
   control(controls,edits,feedback);
   assert(controls.performance.editing_lane_octaves);
-  opxy::u8 saved[10];
+  opxy::u8 saved[project_header];
   assert(control_save(controls,saved,sizeof(saved))==sizeof(saved));
   ControlState restored{};
   control_load(restored,saved,sizeof(saved));
@@ -230,7 +221,7 @@ int main() {
   assert((locked&3)==(pin_pitch|pin_rhythm) && cue_quality(locked)==2 && cue_evolve(locked)==32);
   assert(controls.step_cues[2][4]==0 && controls.step_cues[3][3]==0);
   assert(static_cast<unsigned>(feedback.display[6])==(1u<<8));
-  opxy::u8 project[4106];
+  opxy::u8 project[4108];
   const unsigned bytes=control_save(controls,project,sizeof(project));
   control_load(restored,project,bytes);
   assert(restored.step_cues[3][4]==locked);
@@ -267,10 +258,10 @@ int main() {
   context.page_key=2;
   control(live,context,overlay);
   assert(source_reads==1 && live.bar.count==3);
-  context.values[12][7]=0;
+  live.output_ab[1]=0;
   context.transport.ticks96=384;
   control(live,context,overlay);
-  assert(source_reads==1 && live.bar.count==0); // never double the stock source
+  assert(source_reads==2 && live.bar.count==0); // never double the stock source
 
   // A programmed note takes priority over an overlapping generated note.
   live.bar.count=0;

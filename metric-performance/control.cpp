@@ -8,8 +8,10 @@
 namespace metric {
 using opxy::u32;
 using opxy::i32;
-constexpr u32 kVersion = 0x4d545238; // MTR8
+constexpr u32 kVersion = 0x4d545239; // MTR9
+constexpr u32 kEngineVersion = 0x4d545238;
 constexpr u32 kPreviousVersion = 0x4d545237;
+constexpr unsigned unassigned_output=255, project_header=12;
 
 struct ControlState {
   u32 version;
@@ -25,7 +27,8 @@ struct ControlState {
   metric_visual::PhraseView view;
   u32 host_pattern, host_cycle;
   uint16_t step_cues[cue_patterns][cue_steps];
-  uint8_t route_choices[4];
+  uint8_t route_choices[4], output_ab[2], last_input_a, last_input_b;
+  bool input_b_enabled, inputs_seen;
   bool editing_routes;
   bool metric2_enabled;
   metric2::State development;
@@ -40,6 +43,16 @@ inline u32 decode(i32 raw,u32 choices) {
 inline void update(ControlState& st, const opxy::control::Input& in) {
   for(u32 i=0;i<8;++i) st.values[i]=decode(in.values[in.track][i],
     i==2?16u:i==3?7u:i==4?3u:i==6||i==7?8u:0u);
+  const auto input_b=st.values[7];
+  const bool b_changed=st.inputs_seen && st.last_input_b!=input_b;
+  if(b_changed && st.performance.page==1 && in.host_pattern.pattern==st.host_pattern)
+    st.input_b_enabled=true;
+  if(b_changed || (st.inputs_seen && st.last_input_a!=st.values[6])) st.generated=0;
+  st.last_input_a=static_cast<uint8_t>(st.values[6]);
+  st.inputs_seen=true;
+  st.last_input_b=static_cast<uint8_t>(input_b);
+  for(unsigned lane=0;lane<2;++lane)
+    if(st.output_ab[lane]==unassigned_output) st.output_ab[lane]=st.values[6+lane];
   auto& s=st.settings;
   s.morph=static_cast<uint8_t>(st.values[0]);
   s.density=static_cast<uint8_t>(st.values[1]);
@@ -48,8 +61,8 @@ inline void update(ControlState& st, const opxy::control::Input& in) {
   s.phrase_bars=phrase[st.values[3]];
   s.ratio=static_cast<uint8_t>(st.values[4]);
   s.ratchet=static_cast<uint8_t>(st.values[5]);
-  s.target_a=static_cast<uint8_t>(st.values[6]);
-  s.target_b=static_cast<uint8_t>(st.values[7]);
+  s.target_a=st.output_ab[0];
+  s.target_b=st.output_ab[1];
   s.pitch_a=36; s.pitch_b=42;
 }
 inline unsigned adjust(unsigned value, i32 detents, unsigned maximum) {
@@ -59,7 +72,7 @@ inline unsigned adjust(unsigned value, i32 detents, unsigned maximum) {
 inline void edit_routes(ControlState& st,const opxy::control::Input& in) {
   auto& p=st.performance;
   const bool editing=p.page==3 && in.shift && (!in.page_key || in.page_key==3);
-  const unsigned targets[]={st.values[6],st.values[7],p.target_c,p.target_d};
+  const unsigned targets[]={st.output_ab[0],st.output_ab[1],p.target_c,p.target_d};
   if(editing && !st.editing_routes) {
     for(unsigned lane=0;lane<4;++lane)
       st.route_choices[lane]=(p.off_mask&(1u<<lane)) ? 0 : targets[lane]+1;
@@ -77,10 +90,7 @@ inline void edit_routes(ControlState& st,const opxy::control::Input& in) {
       const unsigned target=choice-1;
       if(target!=targets[lane]) {
         if(lane<2) {
-          const unsigned slot=6+lane;
-          const auto value=static_cast<i32>((target*2+1)<<27);
-          if(!in.set_own_parameter || !in.set_own_parameter(in.track,slot,value))continue;
-          st.values[slot]=target;
+          st.output_ab[lane]=static_cast<uint8_t>(target);
           if(lane==0)st.settings.target_a=target;
           else st.settings.target_b=target;
         } else if(lane==2) p.target_c=target;
@@ -212,6 +222,34 @@ inline void protect_programmed_notes(ControlState& st,u32 index,const opxy::cont
   }
   st.bar.count=static_cast<uint16_t>(keep);
 }
+inline void prepare_track_response(ControlState& st, u32 index, const opxy::control::Input& in,
+                                   const CueWindow& cues) {
+  if(st.performance.off_mask&2u) return;
+  constexpr unsigned capacity=120;
+  opxy::control::PatternEvent notes[2][capacity];
+  opxy::control::PatternTiming timings[2]{};
+  u32 count[2]{};
+  const unsigned input[]={st.values[6],st.values[7]};
+  const bool blend=st.input_b_enabled && input[1]!=input[0];
+  for(unsigned lane=0;lane<2;++lane) {
+    if(!blend && (lane || input[0]==st.settings.target_b)) continue;
+    auto& timing=timings[lane];
+    if(!in.read_pattern(input[lane],notes[lane],capacity,count[lane],timing) ||
+       count[lane]>capacity || !timing.cycle) {
+      count[lane]=0;
+      continue;
+    }
+    timing.phase=pattern_phase_at_bar(timing,in.transport.ticks96,index);
+  }
+  if(count[0] && count[1]) {
+    render_shared_response(st.performance,st.settings,index,notes,count,timings,st.bar,st.lanes,cues);
+  } else {
+    const unsigned lane=count[0] ? 0 : 1;
+    if(count[lane] && input[lane]!=st.settings.target_b)
+      render_programmed_phrase(st.performance,st.settings,index,notes[lane],count[lane],timings[lane].cycle,
+          timings[lane].phase,st.bar,st.lanes,cues);
+  }
+}
 inline void ensure_bar(ControlState& st,u32 index,const opxy::control::Input& in) {
   if(st.generated && st.current_bar==index) return;
   st.bar.count=0;
@@ -228,14 +266,7 @@ inline void ensure_bar(ControlState& st,u32 index,const opxy::control::Input& in
     render_generated_lanes(p,st.settings,index,st.bar,st.lanes,cues);
   if(p.source_mode!=0) {
     if(in.read_pattern) {
-      if(st.settings.target_a!=st.settings.target_b) {
-        opxy::control::PatternEvent notes[120];
-        u32 count=0;
-        opxy::control::PatternTiming timing{};
-        if(in.read_pattern(st.settings.target_a,notes,120,count,timing) && count<=120 && timing.cycle)
-          render_programmed_phrase(p,st.settings,index,notes,count,timing.cycle,
-              pattern_phase_at_bar(timing,in.transport.ticks96,index),st.bar,st.lanes,cues);
-      }
+      prepare_track_response(st,index,in,cues);
     } else if(p.source_mode==1) {
       render_shared_phrase(st.performance,st.settings,index,st.bar,st.lanes);
     }
@@ -254,6 +285,8 @@ inline void control_reset(ControlState& st) {
   st.view={};
   st.editing_routes=false;
   st.metric2_enabled=false;
+  st.input_b_enabled=true; st.inputs_seen=false; st.last_input_a=st.last_input_b=0;
+  st.output_ab[0]=st.output_ab[1]=unassigned_output;
   st.development.clear();
   for(auto& choice : st.route_choices)choice=0;
   st.host_pattern=st.host_cycle=0;
@@ -290,13 +323,16 @@ inline void control_reset(ControlState& st) {
 inline u32 control_save(const ControlState& st, opxy::u8* data,u32 capacity) {
   if(capacity<4)return 0;
   for(u32 i=0;i<4;++i)data[i]=static_cast<opxy::u8>(kVersion>>(8*i));
-  if(capacity<10)return 4;
+  if(capacity<project_header)return 4;
   data[4]=st.performance.target_c | st.performance.off_mask<<4;
   data[5]=st.performance.target_d | static_cast<unsigned>(st.metric2_enabled)<<7;
   for(u32 i=0;i<4;++i)data[6+i]=st.performance.lane_octave[i]+2;
-  u32 last=10;
+  data[10]=st.output_ab[0];
+  data[11]=(st.output_ab[1]==unassigned_output ? 15 : st.output_ab[1]) |
+            static_cast<unsigned>(st.input_b_enabled)<<7;
+  u32 last=project_header;
   for(u32 pattern=0;pattern<cue_patterns;++pattern)for(u32 step=0;step<cue_steps;++step) {
-    const u32 at=10+2*(pattern*cue_steps+step);
+    const u32 at=project_header+2*(pattern*cue_steps+step);
     if(at+2>capacity)return last;
     const unsigned cue=st.step_cues[pattern][step];
     data[at]=cue&255;
@@ -307,18 +343,25 @@ inline u32 control_save(const ControlState& st, opxy::u8* data,u32 capacity) {
 }
 inline void control_load(ControlState& st,const opxy::u8* data,u32 size) {
   control_reset(st);
-  if(!data || size<10 || size>10+2*cue_patterns*cue_steps || size%2)return;
+  if(!data || size<10 || size%2)return;
   u32 version=0;
   for(u32 i=0;i<4;++i)version|=static_cast<u32>(data[i])<<(8*i);
-  if(version!=kVersion && version!=kPreviousVersion)return;
+  if(version!=kVersion && version!=kEngineVersion && version!=kPreviousVersion)return;
+  const unsigned header=version==kVersion ? project_header : 10;
+  if(size<header || size>header+2*cue_patterns*cue_steps)return;
+  st.input_b_enabled=version==kVersion && (data[11]&128);
+  if(version==kVersion) {
+    if(data[10]<8)st.output_ab[0]=data[10];
+    if((data[11]&127)<8)st.output_ab[1]=data[11]&7;
+  }
   if(!(data[4]&8))st.performance.target_c=data[4]&7;
   st.performance.off_mask=data[4]>>4;
   if((data[5]&127)<8)st.performance.target_d=data[5]&7;
-  st.metric2_enabled=version==kVersion && (data[5]&128);
+  st.metric2_enabled=version!=kPreviousVersion && (data[5]&128);
   for(u32 i=0;i<4;++i)if(data[6+i]<5)st.performance.lane_octave[i]=static_cast<int>(data[6+i])-2;
-  for(u32 at=10;at<size;at+=2) {
+  for(u32 at=header;at<size;at+=2) {
     const unsigned cue=data[at] | static_cast<unsigned>(data[at+1])<<8;
-    const unsigned index=(at-10)/2;
+    const unsigned index=(at-header)/2;
     if(valid_cue(cue))st.step_cues[index/cue_steps][index%cue_steps]=cue;
   }
 }
@@ -401,9 +444,10 @@ inline void control(ControlState& st,const opxy::control::Input& in,opxy::contro
   for(unsigned i=0;i<4;++i)lane_octaves|=static_cast<unsigned>(p.lane_octave[i]+2)<<(4*i);
   overlay.display[13]=in.shift | static_cast<unsigned>(p.editing_octave)<<1 |
     static_cast<unsigned>(p.editing_lane_octaves)<<2 |
-    static_cast<unsigned>(p.editing_anchor_scale)<<3 | static_cast<unsigned>(st.metric2_enabled)<<4 | lane_octaves<<16 |
+    static_cast<unsigned>(p.editing_anchor_scale)<<3 | static_cast<unsigned>(st.metric2_enabled)<<4 |
+    static_cast<unsigned>(st.input_b_enabled && st.values[7]!=st.values[6])<<5 | lane_octaves<<16 |
     static_cast<unsigned>(p.octave+2)<<8;
-  const unsigned targets[]={st.values[6],st.values[7],p.target_c,p.target_d};
+  const unsigned targets[]={st.output_ab[0],st.output_ab[1],p.target_c,p.target_d};
   unsigned route_bank=0;
   for(unsigned lane=0;lane<4;++lane) {
     const unsigned choice=st.editing_routes ? st.route_choices[lane] :

@@ -150,9 +150,13 @@ void test_device_controls(const Block& input) {
     require(controller.click(1, false) == InputResult::page_changed &&
             controller.click(2, false) == InputResult::page_changed &&
             controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Level Match") == 0 &&
-            std::strcmp(panel.encoders[1].label, "Drum") == 0 &&
+            std::strcmp(panel.encoders[1].label, "Mix") == 0 &&
             std::strcmp(panel.encoders[2].label, "Stereo") == 0 && !panel.enabled,
             "A refinement click must switch only its own encoder");
+    require(panel.alternate[0] && panel.alternate[1] && panel.alternate[2] && !panel.alternate[3] &&
+            std::strcmp(panel.primary[0].label, "Time") == 0 &&
+            std::strcmp(panel.secondary[0].label, "Level Match") == 0,
+            "Panel must expose each encoder's two rows and its independent highlight");
     require(controller.click(0, false) == InputResult::page_changed &&
             controller.click(2, false) == InputResult::page_changed &&
             controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Time") == 0 &&
@@ -344,6 +348,7 @@ int main() {
             "Reset and silence must clear retained audio");
 
     ott::Controls neutral, wet;
+    neutral.character = wet.character = ott::Drum;
     neutral.depth = 0;
     neutral.level_match = wet.level_match = 0;
     require(level(7500., .0008, wet) > 4 * level(7500., .0008, neutral),
@@ -357,6 +362,7 @@ int main() {
             level(10000., .025, trims) < .4 * level(10000., .025, neutral),
             "Low and High must have independent band trims even at zero Depth");
     ott::Controls auto_controls;
+    auto_controls.character = ott::Drum;
     test_level_match(660., .012, false, auto_controls);
     test_level_match(180., .25, false, auto_controls);
     test_level_match(180., .72, false, auto_controls);

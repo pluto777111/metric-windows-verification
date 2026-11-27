@@ -99,7 +99,7 @@
     },
     {
       "id": "target_a",
-      "label": "track A",
+      "label": "input A",
       "default": 0.0625,
       "mapping": {
         "kind": "enum",
@@ -119,7 +119,7 @@
     },
     {
       "id": "target_b",
-      "label": "track B",
+      "label": "input B",
       "default": 0.1875,
       "mapping": {
         "kind": "enum",
@@ -157,7 +157,7 @@
     "sharedBytes": 0,
     "outputPeakQ31": 1073741824,
     "display": {
-      "stateBytes": 20,
+      "stateBytes": 8724,
       "stateAlignment": 4,
       "paths": 0,
       "points": 0,
@@ -172,7 +172,7 @@
       "aux": [
         12
       ],
-      "savedBytes": 4106
+      "savedBytes": 4108
     }
   },
   "press": "page"

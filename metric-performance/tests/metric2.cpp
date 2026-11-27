@@ -59,12 +59,12 @@ int main() {
     control(st, in, display);
     assert(st.metric2_enabled);
     assert((display.display[13] & 16) != 0);
-    unsigned char bytes[10]{};
+    unsigned char bytes[project_header]{};
     assert(control_save(st, bytes, sizeof bytes) == sizeof bytes);
     control_load(recalled, bytes, sizeof bytes);
     assert(recalled.metric2_enabled);
     bytes[0] = static_cast<unsigned char>(kPreviousVersion);
-    control_load(recalled, bytes, sizeof bytes);
+    control_load(recalled, bytes, 10);
     assert(!recalled.metric2_enabled);
     control(st, in, display);
     assert(!st.metric2_enabled);

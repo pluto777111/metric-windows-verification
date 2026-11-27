@@ -5,7 +5,7 @@
 namespace metric {
 using namespace opxy::draw;
 using opxy::u32;
-static const char* const titles[8]={"morph","density","rotate","phrase","ratio","ratchet","track A","track B"};
+static const char* const titles[8]={"morph","density","rotate","phrase","ratio","ratchet","input A","input B"};
 inline void number(char* out,unsigned value) {
   char r[12]; unsigned n=0,i=0;
   do{r[n++]=static_cast<char>('0'+value%10);value/=10;}while(value&&n<11);
@@ -38,6 +38,8 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
     else if(i==4)copy(values[i],header_capacity,ratios[v]);
     else number(values[i],v+(i>=6?1:0));
   }
+  const bool second_input=(opxy::control::from_control(13)&32u)!=0;
+  if(!second_input && page==1) copy(values[7],header_capacity,"OFF");
   if(audition) {
     static const char* const modes[]={"DRUM","TONAL","LOCK"};
     static const char* const scales[]={"MAJOR","MINOR","DORIAN","MIXOLYD","PHRYG","HARM MIN",
@@ -70,7 +72,7 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
       number(values[7],steps ? steps : span);
       if((modifiers&8u) && !(steps && held)) header_input.shown[3]=7;
     } else if(page==3 && shifted) {
-      static const char* const routes[]={"track A","track B","track C","track D"};
+      static const char* const routes[]={"out A","out B","out C","out D"};
       for(unsigned i=0;i<4;++i) {
         names[i]=routes[i];
         if(knob[i])number(values[i],knob[i]);
@@ -158,6 +160,9 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
       }
       if(playing)place(frame,40,metric_visual::xpos(bar_tick)*unit,200*unit,unit,8,fill_and_stroke);
       else text(frame,17,12*unit,85*unit,unit,"PLAY TO SEE NOTES");
+    } else if(page==3 && !(opxy::control::from_control(13)&1u)) {
+      const unsigned source=static_cast<unsigned>(opxy::control::from_control(12))>>24;
+      if(source)text(frame,17,12*unit,85*unit,unit,second_input ? "INPUT A + B TO OUT B" : "INPUT A TO OUT B");
     } else if(page==4 && (opxy::control::from_control(13)&1u) && !opxy::control::from_control(8)) {
       text(frame,17,12*unit,85*unit,unit,metric2 ? "ENGINE: METRIC 2" : "ENGINE: METRIC 1");
       text(frame,19,12*unit,123*unit,unit,"BLACK CLICK TO SWITCH");
@@ -237,8 +242,9 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
     place(frame,41,x,180*unit,unit,10,fill_and_stroke);
   }else{hide(frame,40);hide(frame,41);}
   char a_label[16],b_label[16];
-  number(a_label,knobs[6]+1);number(b_label,knobs[7]+1);
-  text(frame,19,12*unit,201*unit,unit,"ROUTE A/B");
+  number(a_label,knobs[6]+1);
+  if(second_input)number(b_label,knobs[7]+1);else copy(b_label,16,"OFF");
+  text(frame,19,12*unit,201*unit,unit,"INPUT A/B");
   text(frame,20,113*unit,201*unit,unit,a_label);
   text(frame,21,137*unit,201*unit,unit,b_label);
   text(frame,22,191*unit,201*unit,unit,ratios[knobs[4]]);

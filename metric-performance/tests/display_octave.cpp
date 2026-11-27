@@ -51,7 +51,7 @@ int main() {
   display_words[14]=5<<8 | 7<<16 | 8<<24;
   metric::display(state,input,frame);
   assert(state.header.page==0);
-  assert(std::strcmp(frame.texts[0].chars,"track a")==0);
+  assert(std::strcmp(frame.texts[0].chars,"out a")==0);
   assert(std::strcmp(frame.header[0],"OFF")==0);
   assert(std::strcmp(frame.header[2],"7")==0);
   display_words[13]=(display_words[13]&~1)|4;
@@ -90,5 +90,5 @@ int main() {
   display_words[6]=888;
   metric::display(state,input,frame);
   assert(frame.texts[23].chars[0]=='\0');
-  assert(std::strcmp(frame.texts[19].chars,"ROUTE A/B")==0);
+  assert(std::strcmp(frame.texts[19].chars,"INPUT A/B")==0);
 }

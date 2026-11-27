@@ -209,6 +209,24 @@ inline unsigned pattern_phase_at_bar(const opxy::control::PatternTiming& timing,
     return (timing.phase+timing.cycle-elapsed%timing.cycle)%timing.cycle;
 }
 
+inline unsigned companion_pitch(const Performance& p, OutputMode mode, unsigned bar, unsigned order,
+                                unsigned pitch, unsigned anchor, unsigned cue, int lane_octave=0) {
+    const unsigned period=p.pace ? p.pace : 1;
+    if(!(cue&pin_pitch) && p.pitch_motion && p.target!=0 && p.destination &&
+       mode!=OutputMode::drum && (bar/period+order)%2) {
+        const unsigned motion=p.pitch_motion/10;
+        if(pitch+motion<=127) pitch+=motion;
+    }
+    if(mode!=OutputMode::drum) {
+        pitch=evolved_pitch(p,pitch,bar,anchor,cue);
+        pitch=shifted_octave(pitch,p.octave+lane_octave);
+    }
+    if(mode==OutputMode::scale_lock) pitch=locked_pitch(pitch,p.root,p.scale);
+    if(mode==OutputMode::drum && pitch!=36 && pitch!=38 && pitch!=42 && pitch!=46)
+        pitch=output_pitch(mode,pitch%7,p.root,p.scale);
+    return pitch;
+}
+
 inline void render_programmed_phrase(const Performance& p, const metric_core::Settings& master,
                                      unsigned bar, const opxy::control::PatternEvent* notes,
                                      unsigned count, unsigned cycle, unsigned phase,
@@ -245,25 +263,93 @@ inline void render_programmed_phrase(const Performance& p, const metric_core::Se
                 tick<metric_core::BAR_TICKS && out.count<metric_core::MAX_EVENTS;tick+=cycle) {
                 const unsigned cue=cues.at(static_cast<int>(tick)-static_cast<int>(delay));
                 if(((cue&pin_rhythm)!=0)!=pinned) continue;
-                unsigned pitch=n.pitch;
-                if(!(cue&pin_pitch) && p.pitch_motion && p.target!=0 && p.destination &&
-                   mode!=OutputMode::drum && (bar/period+i)%2) {
-                    const unsigned motion=p.pitch_motion/10;
-                    if(pitch+motion<=127) pitch+=motion;
-                }
-                if(mode!=OutputMode::drum) {
-                    pitch=evolved_pitch(p,pitch,bar,notes[0].pitch,cue);
-                    pitch=shifted_octave(pitch,p.octave);
-                }
-                if(mode==OutputMode::scale_lock) pitch=locked_pitch(pitch,p.root,p.scale);
-                if(mode==OutputMode::drum && pitch!=36 && pitch!=38 && pitch!=42 && pitch!=46)
-                    pitch=output_pitch(mode,pitch%7,p.root,p.scale);
+                const unsigned pitch=companion_pitch(p,mode,bar,i,n.pitch,notes[0].pitch,cue);
                 append_performance_event(out,lanes,
                     {static_cast<uint16_t>(tick),master.target_b,static_cast<uint8_t>(pitch),n.velocity,length},1,false);
             }
         };
         if(keep_evolved) emit(transformed,offset,false);
         if(cues.active) emit(n.tick,0,true);
+    }
+}
+
+// Put both patterns on the same song-clock window before choosing the
+// response's pitches or accents. Each 96-PPQN tick has one strongest cue.
+struct ResponseOnset {
+    uint16_t length, cue;
+    uint8_t pitch, velocity;
+};
+
+template <unsigned capacity>
+inline void render_shared_response(const Performance& p, const metric_core::Settings& master,
+                                    unsigned bar, const opxy::control::PatternEvent (&notes)[2][capacity],
+                                    const opxy::u32 (&count)[2], const opxy::control::PatternTiming (&timing)[2],
+                                    metric_core::Bar& out, uint8_t* lanes,const CueWindow& cues) {
+    constexpr unsigned ticks=metric_core::BAR_TICKS;
+    ResponseOnset window[ticks]{};
+    bool original_hits[ticks]{}, crowded[ticks]{};
+    const unsigned period=p.pace ? p.pace : 1;
+    const unsigned rotation=(master.rotation+(bar/period)%metric_core::bounded_phrase(master.phrase_bars))*24;
+    for(unsigned input=0;input<2;++input) {
+        const unsigned cycle=timing[input].cycle;
+        const unsigned phase=timing[input].phase;
+        for(unsigned i=0;i<count[input];++i) {
+            const auto& note=notes[input][i];
+            const unsigned original=(note.tick+cycle-phase)%cycle;
+            if(p.interplay==1) {
+                for(unsigned tick=original;tick<ticks;tick+=cycle) original_hits[tick]=true;
+            }
+            unsigned distance=0;
+            if(p.distance && p.target!=0) {
+                distance=p.distance/10;
+                if(p.journey==2 && (i*37+bar*11)%100<p.freedom)distance*=2;
+            }
+            const unsigned offset=(rotation+(p.interplay==2?48:0)+distance)%cycle;
+            const auto place=[&](unsigned onset,unsigned delay,bool pinned) {
+                for(unsigned tick=onset;tick<ticks;tick+=cycle) {
+                    const unsigned cue=cues.at(static_cast<int>(tick)-static_cast<int>(delay));
+                    if(((cue&pin_rhythm)!=0)!=pinned)continue;
+                    auto& decision=window[tick];
+                    if(note.velocity>decision.velocity) {
+                        const unsigned duration=note.length>1536 ? 1536 : note.length;
+                        decision={static_cast<uint16_t>(duration),static_cast<uint16_t>(cue),note.pitch,note.velocity};
+                    }
+                }
+            };
+            place((original+offset)%cycle,offset,false);
+            if(cues.active)place(original,0,true);
+        }
+    }
+
+    if(p.interplay==1) {
+        unsigned near=0;
+        for(unsigned tick=0;tick<12;++tick) near+=original_hits[tick];
+        for(unsigned tick=0;tick<ticks;++tick) {
+            if(tick>=13) near-=original_hits[tick-13];
+            if(tick+12<ticks) near+=original_hits[tick+12];
+            crowded[tick]=near!=0;
+        }
+    }
+    unsigned first=ticks,last=ticks,omit=ticks;
+    for(unsigned tick=0;tick<ticks;++tick) {
+        const auto& note=window[tick];
+        if(!note.velocity || !note.length || (crowded[tick] && !(note.cue&pin_rhythm)))continue;
+        if(first==ticks)first=tick;
+        if(p.tension>=50 && last!=ticks && last!=first && !(window[last].cue&pin_rhythm) &&
+           (omit==ticks || window[last].velocity>window[omit].velocity))omit=last;
+        last=tick;
+    }
+    if(first==ticks)return;
+    const auto mode=static_cast<OutputMode>(p.output);
+    unsigned order=0;
+    for(unsigned tick=first;tick<=last && out.count<metric_core::MAX_EVENTS;++tick) {
+        const auto& note=window[tick];
+        if(tick==omit || !note.velocity || !note.length || (crowded[tick] && !(note.cue&pin_rhythm)))continue;
+        const unsigned pitch=companion_pitch(p,mode,bar,order++,note.pitch,window[first].pitch,note.cue,
+                                             p.lane_octave[1]);
+        append_performance_event(out,lanes,
+            {static_cast<uint16_t>(tick),master.target_b,static_cast<uint8_t>(pitch),note.velocity,note.length},
+            1,false);
     }
 }
 

@@ -34,7 +34,7 @@ int main(){
   in.muted=1;
   for(unsigned t=384;t<768;++t){tick(st,in,out,t); assert(!out.note_count);}
   // Explicit ratio and new lane route apply when transport continues.
-  in.muted=0; in.values[12][4]=q(1,3); in.values[12][7]=q(4,8);
+  in.muted=0; in.values[12][4]=q(1,3); st.output_ab[1]=4;
   unsigned new_target=0;
   for(unsigned t=768;t<1152;++t){
     tick(st,in,out,t);
