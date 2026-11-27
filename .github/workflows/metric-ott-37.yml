@@ -3,7 +3,7 @@ name: METRIC + OTT with the full 37-machine collection
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/metric-ott-37-machines']
+    branches: ['codex/metric-ott-37-machines', 'codex/metric2-ott-mix-37']
     paths:
       - '.github/workflows/metric-ott-37.yml'
       - 'metric-performance/**'

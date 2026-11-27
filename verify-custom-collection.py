@@ -42,6 +42,9 @@ elif action == 'verify':
         raise ValueError('The expanded image did not verify independently')
     if not {'ott_insert', 'drumline', 'drum_sends', 'extensions'} <= set(report['services']):
         raise ValueError('Missing OTT or a baseline SDK service')
+    stack = report.get('audio_stack_bytes', {})
+    if 'sdk:master_filter' not in stack:
+        raise ValueError('No mix OTT audio entry in the native stack audit')
     if not all(any(entry.get('extension', '').replace('\\', '/').endswith('/' + item)
                    for entry in manifest['collection']) for item in saved['extensions']):
         raise ValueError('A saved extension is absent')

@@ -146,14 +146,15 @@ index e17c08b..c5e3728 100644
        }
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter.svg b/sdk/platform/opxy-1.2.1/ott_filter.svg
 new file mode 100644
-index 0000000..55d1953
+index 0000000..e97fa8a
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter.svg
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,17 @@
 +<svg xmlns="http://www.w3.org/2000/svg" width="480" height="222" viewBox="0 0 480 222">
 +  <path fill="#000000" d="M0 0H480V222H0Z"/>
 +  <path fill="#454545" d="M14 70H466V71H14Z M14 163H466V164H14Z"/>
 +  <path fill="#454545" d="M14 131H114V134H14Z M131 131H231V134H131Z M248 131H348V134H248Z M365 131H465V134H365Z"/>
++  <path id="ott_popup" transform="matrix(1 0 0 1 500 0)" fill="#282828" d="M10 80H470V156H10Z"/>
 +  <path id="ott_marker1" transform="matrix(1 0 0 1 17 132)" fill="#ECECEC" d="M-2 -7H2V7H-2Z"/>
 +  <path id="ott_marker2" transform="matrix(1 0 0 1 134 132)" fill="#ECECEC" d="M-2 -7H2V7H-2Z"/>
 +  <path id="ott_marker3" transform="matrix(1 0 0 1 251 132)" fill="#ECECEC" d="M-2 -7H2V7H-2Z"/>
@@ -168,18 +169,24 @@ index 0000000..55d1953
 +</svg>
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
 new file mode 100644
-index 0000000..ec7d663
+index 0000000..7e53937
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/device_controls.hpp
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,179 @@
 +#pragma once
 +
 +#include "track_insert.hpp"
 +
 +namespace ott {
 +
++constexpr u32 mix_index = TrackInserts::track_count;
++constexpr u32 settings_count = mix_index + 1;
++
++constexpr TrackSettings mix_defaults() { return TrackSettings(Controls(q31::maximum / 3, Mix)); }
++
 +struct ProjectSettings {
-+    TrackSettings track[TrackInserts::track_count];
++    TrackSettings track[TrackInserts::track_count]{};
++    TrackSettings mix = mix_defaults();
 +};
 +
 +enum class Page { other, envelope, ott };
@@ -194,6 +201,7 @@ index 0000000..ec7d663
 +    u32 track_number;
 +    u32 enabled_count;
 +    bool enabled;
++    bool shifted;
 +    EncoderValue encoders[4];
 +};
 +
@@ -207,6 +215,9 @@ index 0000000..ec7d663
 +        stock_page_ = stock_page;
 +    }
 +
++    void select_mix(bool on_eq) { select(mix_index, on_eq ? Page::envelope : Page::other); }
++    bool is_mix() const { return track_ == mix_index; }
++
 +    Page page() const { return open_ ? Page::ott : stock_page_; }
 +
 +    // The first M2 press selects the stock envelope screen. Repeat M2 to
@@ -216,15 +227,16 @@ index 0000000..ec7d663
 +            open_ = false;
 +            return InputResult::stock;
 +        }
-+        if (track_ >= TrackInserts::track_count || stock_page_ != Page::envelope)
++        if (track_ >= settings_count || stock_page_ != Page::envelope)
 +            return InputResult::stock;
 +        open_ = !open_;
 +        return InputResult::page_changed;
 +    }
 +
 +    InputResult click(u32 encoder, bool shifted) {
-+        if (!open_ || encoder >= 4 || shifted) return InputResult::stock;
-+        if (encoder == 3) return set_enabled(!project_.track[track_].enabled);
++        if (!open_ || encoder >= 4) return InputResult::stock;
++        if (shifted) return InputResult::handled;
++        if (encoder == 3) return set_enabled(!settings().enabled);
 +        auto& position = shown_[track_][encoder];
 +        position = !position;
 +        return InputResult::page_changed;
@@ -232,9 +244,17 @@ index 0000000..ec7d663
 +
 +    InputResult turn(u32 encoder, bool shifted, i32 detents, u32 acceleration) {
 +        if (!open_ || encoder >= 4) return InputResult::stock;
-+        if (shifted) return InputResult::handled;
-+        const Binding param = binding(encoder);
-+        i32& value = project_.track[track_].controls.*param.value;
++        const Binding param = binding(encoder, shifted);
++        i32& value = settings().controls.*param.value;
++        const i32 choices = param.value == &Controls::character ? 3 : param.value == &Controls::focus ? 4 : 0;
++        if (choices) {
++            const i32 detent = detents < 0 ? -1 : detents > 0 ? 1 : 0;
++            const i32 requested = value + detent;
++            const i32 next = requested < 0 ? 0 : requested >= choices ? choices - 1 : requested;
++            if (next == value) return InputResult::handled;
++            value = next;
++            return InputResult::settings_changed;
++        }
 +        if (param.value == &Controls::level_match) {
 +            if (!detents) return InputResult::handled;
 +            const i32 next = detents > 0 ? q31::maximum : 0;
@@ -245,7 +265,7 @@ index 0000000..ec7d663
 +        const i32 bounded = detents < -127 ? -127 : detents > 127 ? 127 : detents;
 +        const i32 speed = acceleration < 3 ? static_cast<i32>(acceleration + 1) : 4;
 +        // The offset can exceed one Q31 word for accelerated turns.
-+        const auto change = static_cast<opxy::i64>(bounded) * speed * (q31::maximum / 100);
++        const auto change = q31::wide(bounded * speed, q31::maximum / 100);
 +        const i32 next = q31::saturate(static_cast<opxy::i64>(value) + change);
 +        const i32 normalized = next < 0 ? 0 : next;
 +        if (value == normalized) return InputResult::handled;
@@ -253,15 +273,25 @@ index 0000000..ec7d663
 +        return InputResult::settings_changed;
 +    }
 +
-+    bool panel(Panel& panel) const {
++    bool panel(Panel& panel, bool shifted = false) const {
 +        if (!open_) return false;
-+        const auto& settings = project_.track[track_];
-+        panel.track_number = track_ + 1;
++        const auto& settings = this->settings();
++        panel.track_number = is_mix() ? 0 : track_ + 1;
 +        panel.enabled = settings.enabled;
++        panel.shifted = shifted;
 +        panel.enabled_count = count(project_);
 +        for (u32 i = 0; i < 4; ++i) {
-+            const Binding param = binding(i);
-+            panel.encoders[i] = {param.label, settings.controls.*param.value};
++            const Binding param = binding(i, shifted);
++            const i32 value = settings.controls.*param.value;
++            if (param.value == &Controls::character) {
++                const char* const names[] = {"Drum", "Pad", "Mix"};
++                panel.encoders[i] = {names[value], value * (q31::maximum / 2)};
++            } else if (param.value == &Controls::focus) {
++                const char* const names[] = {"Stereo", "Mid", "Side", "Mono"};
++                panel.encoders[i] = {names[value], value * (q31::maximum / 3)};
++            } else {
++                panel.encoders[i] = {param.label, value};
++            }
 +        }
 +        return true;
 +    }
@@ -277,25 +307,33 @@ index 0000000..ec7d663
 +    }
 +
 +private:
++    TrackSettings& settings() { return is_mix() ? project_.mix : project_.track[track_]; }
++    const TrackSettings& settings() const { return is_mix() ? project_.mix : project_.track[track_]; }
++
 +    struct Binding {
 +        const char* label;
 +        i32 Controls::*value;
 +    };
 +
-+    Binding binding(u32 encoder) const {
++    Binding binding(u32 encoder, bool shifted) const {
 +        static constexpr Binding controls[3][2] = {
 +            {{"Time", &Controls::time}, {"Level Match", &Controls::level_match}},
-+            {{"Low", &Controls::low_trim}, {"Upward", &Controls::upward}},
-+            {{"High", &Controls::high_trim}, {"Downward", &Controls::downward}},
++            {{"Low", &Controls::low_trim}, {"Character", &Controls::character}},
++            {{"High", &Controls::high_trim}, {"Focus", &Controls::focus}},
 +        };
++        static constexpr Binding shift_controls[] = {
++            {"Crossover", &Controls::crossover}, {"Low Protect", &Controls::low_protect},
++            {"Upward", &Controls::upward}, {"Downward", &Controls::downward},
++        };
++        if (shifted) return shift_controls[encoder];
 +        if (encoder == 3) return {"Depth", &Controls::depth};
 +        return controls[encoder][shown_[track_][encoder]];
 +    }
 +
 +    InputResult set_enabled(bool enabled) {
-+        auto& settings = project_.track[track_];
++        auto& settings = this->settings();
 +        if (settings.enabled == enabled) return InputResult::handled;
-+        if (enabled && count(project_) >= TrackInserts::insert_limit) return InputResult::insert_limit;
++        if (enabled && !is_mix() && count(project_) >= TrackInserts::insert_limit) return InputResult::insert_limit;
 +        settings.enabled = enabled;
 +        return InputResult::settings_changed;
 +    }
@@ -307,8 +345,8 @@ index 0000000..ec7d663
 +    }
 +
 +    ProjectSettings project_;
-+    opxy::u8 shown_[TrackInserts::track_count][3] = {};
-+    u32 track_ = TrackInserts::track_count;
++    opxy::u8 shown_[settings_count][3] = {};
++    u32 track_ = settings_count;
 +    Page stock_page_ = Page::other;
 +    bool open_ = false;
 +};
@@ -390,27 +428,43 @@ index 0000000..d765147
 +}}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
 new file mode 100644
-index 0000000..7806df9
+index 0000000..0db301e
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/firmware_runtime.hpp
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,193 @@
 +#pragma once
 +#include "device_controls.hpp"
 +
 +namespace ott {
 +constexpr i32 Controls::* parameters[] = {
 +    &Controls::depth, &Controls::time, &Controls::low_trim, &Controls::high_trim,
-+    &Controls::upward, &Controls::downward, &Controls::level_match
++    &Controls::upward, &Controls::downward, &Controls::level_match, &Controls::crossover,
++    &Controls::low_protect, &Controls::focus, &Controls::character
 +};
 +constexpr u32 parameter_count = sizeof(parameters) / sizeof(parameters[0]);
-+constexpr u32 project_bytes = 1 + TrackInserts::track_count * (1 + 4 * parameter_count);
++constexpr u32 project_bytes = 1 + settings_count * (1 + 4 * parameter_count);
 +constexpr u32 message_id = 128, last_parameter_id = message_id + parameter_count;
 +using Byte = unsigned char;
 +
++inline TrackSettings& config(ProjectSettings& project, u32 index) {
++    return index == mix_index ? project.mix : project.track[index];
++}
++inline const TrackSettings& config(const ProjectSettings& project, u32 index) {
++    return index == mix_index ? project.mix : project.track[index];
++}
++inline bool valid(i32 Controls::* parameter, u32 value) {
++    if (value > static_cast<u32>(q31::maximum)) return false;
++    if (parameter == &Controls::focus) return value <= Mono;
++    if (parameter == &Controls::character) return value <= Mix;
++    if (parameter == &Controls::level_match) return !value || value == static_cast<u32>(q31::maximum);
++    return true;
++}
++
 +inline u32 encode_project(const ProjectSettings& project, Byte* data) {
-+    data[0] = 5;
++    data[0] = 7;
 +    u32 at = 1;
-+    for (const auto& track : project.track) {
++    for (u32 index = 0; index < settings_count; ++index) {
++        const auto& track = config(project, index);
 +        data[at++] = track.enabled;
 +        for (const auto parameter : parameters) {
 +            const u32 value = static_cast<u32>(track.controls.*parameter);
@@ -421,29 +475,27 @@ index 0000000..7806df9
 +}
 +
 +inline bool decode_project(const Byte* data, u32 count, ProjectSettings& project) {
-+    // The earlier compressor used different parameters. Opening those
-+    // projects starts OTT bypassed at the Faust defaults.
-+    if (!data || !count || data[0] < 3 || data[0] > 5) return false;
-+    const bool had_mid_trim = data[0] < 5;
-+    const bool manual_trim = data[0] == 3;
-+    const u32 slots = parameter_count + had_mid_trim;
-+    if (count != 1 + TrackInserts::track_count * (1 + 4 * slots)) return false;
++    if (!data || !count || data[0] < 3 || data[0] > 7) return false;
++    const unsigned version = data[0];
++    const bool had_mid_trim = version < 5;
++    const u32 slots = version == 7 ? parameter_count : version == 5 ? 7 : 8;
++    const u32 count_settings = version == 7 ? settings_count : TrackInserts::track_count;
++    if (count != 1 + count_settings * (1 + 4 * slots)) return false;
 +    ProjectSettings next{};
 +    u32 at = 1, enabled = 0;
-+    for (auto& track : next.track) {
++    for (u32 index = 0; index < count_settings; ++index) {
++        auto& track = config(next, index);
 +        if (data[at] > 1) return false;
 +        track.enabled = data[at++] != 0;
-+        enabled += track.enabled;
++        if (index < mix_index) enabled += track.enabled;
 +        for (u32 slot = 0; slot < slots; ++slot) {
 +            u32 value = 0;
 +            for (u32 byte = 0; byte < 4; ++byte) value |= static_cast<u32>(data[at++]) << (8 * byte);
 +            if (value > static_cast<u32>(q31::maximum)) return false;
 +            if (had_mid_trim && slot == 6) continue;
 +            const auto parameter = parameters[had_mid_trim && slot > 6 ? slot - 1 : slot];
-+            if (parameter == &Controls::level_match) {
-+                if (manual_trim) continue;
-+                if (value && value != static_cast<u32>(q31::maximum)) return false;
-+            }
++            if (version == 3 && parameter == &Controls::level_match) continue;
++            if (!valid(parameter, value)) return false;
 +            track.controls.*parameter = static_cast<i32>(value);
 +        }
 +    }
@@ -458,12 +510,12 @@ index 0000000..7806df9
 +    const u32 end = selection ? selection : TrackInserts::track_count;
 +    u32 enable = 0;
 +    for (u32 index = first; index < end; ++index)
-+        if (project.track[index].enabled) enable |= 1u << index;
++        if (config(project, index).enabled) enable |= 1u << (index == mix_index ? 0 : index);
 +    sequence &= 0x7fffu;
 +    send(message_id, static_cast<i32>(sequence << 16 | enable << 8 | selection << 1 | (reset ? 1u : 0u)));
 +    for (u32 index = first; index < end; ++index)
 +        for (u32 slot = 0; slot < parameter_count; ++slot)
-+            send(message_id + 1 + slot, project.track[index].controls.*parameters[slot]);
++            send(message_id + 1 + slot, config(project, index).controls.*parameters[slot]);
 +    send(message_id, static_cast<i32>(0x80000000u | sequence));
 +}
 +
@@ -480,16 +532,22 @@ index 0000000..7806df9
 +                for (const auto& track : staged_.track) enabled += track.enabled;
 +                if (enabled <= TrackInserts::insert_limit) {
 +                    pending_ = staged_;
-+                    changed_ = true;
-+                    reset_pending_ = reset_pending_ || reset_;
++                    if (end_ == settings_count) {
++                        mix_changed_ = true;
++                        mix_reset_ = mix_reset_ || reset_;
++                    } else {
++                        changed_ = true;
++                        reset_pending_ = reset_pending_ || reset_;
++                    }
 +                }
 +            }
 +            reading_ = false;
 +        } else if (reading_) {
-+            if (index_ == end_ || id != message_id + 1 + slot_ || value < 0) {
++            const auto parameter = parameters[slot_];
++            if (index_ == end_ || id != message_id + 1 + slot_ || !valid(parameter, word)) {
 +                reading_ = false;
 +            } else {
-+                staged_.track[index_].controls.*parameters[slot_] = value;
++                config(staged_, index_).controls.*parameter = value;
 +                if (++slot_ == parameter_count) {
 +                    slot_ = 0;
 +                    ++index_;
@@ -500,8 +558,6 @@ index 0000000..7806df9
 +    }
 +
 +    void start_track(u32 track) {
-+        // The stock mixer visits instrument tracks in ascending order and may
-+        // skip external MIDI tracks. Detect the next block at the wrap.
 +        if (track <= last_track_ && changed_) {
 +            inserts_.configure(pending_.track);
 +            if (reset_pending_) inserts_.reset();
@@ -513,10 +569,39 @@ index 0000000..7806df9
 +    bool needs_tail(u32 track) const { return inserts_.needs_tail(track); }
 +    u32 process(u32 track, i32* sum, u32 voices) { return inserts_.process(track, sum, voices); }
 +
++    // Stock supplies split stereo buffers here, after EQ. The static working
++    // buffer keeps this adapter off the audio stack. Bypass performs no DSP.
++    void process_mix(i32* left, i32* right) {
++        if (mix_changed_) {
++            mix_ = pending_.mix;
++            if (mix_reset_) {
++                mix_processor_.reset();
++                mix_wet_ = 0;
++            }
++            mix_changed_ = mix_reset_ = false;
++        }
++        if (!mix_.enabled && !mix_wet_) return;
++        for (u32 i = 0; i < opxy::block_frames; ++i) {
++            mix_buffer_[2*i] = left[i];
++            mix_buffer_[2*i+1] = right[i];
++        }
++        mix_processor_.process(mix_buffer_, mix_.controls);
++        for (u32 i = 0; i < opxy::block_frames; ++i) {
++            constexpr i32 ceiling = 256;
++            if (mix_.enabled && mix_wet_ < ceiling) ++mix_wet_;
++            if (!mix_.enabled && mix_wet_) --mix_wet_;
++            left[i] = static_cast<i32>((q31::wide(left[i], ceiling - mix_wet_) +
++                                        q31::wide(mix_buffer_[2*i], mix_wet_)) / ceiling);
++            right[i] = static_cast<i32>((q31::wide(right[i], ceiling - mix_wet_) +
++                                         q31::wide(mix_buffer_[2*i+1], mix_wet_)) / ceiling);
++        }
++        if (!mix_.enabled && !mix_wet_) mix_processor_.reset_signal();
++    }
++
 +private:
 +    void begin(u32 word) {
 +        const u32 selected = (word >> 1) & 15;
-+        reading_ = selected <= TrackInserts::track_count && !(word & 0xe0);
++        reading_ = selected <= settings_count && !(word & 0xe0);
 +        if (!reading_) return;
 +        reset_ = (word & 1) != 0;
 +        sequence_ = word >> 16;
@@ -525,22 +610,27 @@ index 0000000..7806df9
 +        slot_ = 0;
 +        staged_ = pending_;
 +        for (u32 index = index_; index < end_; ++index)
-+            staged_.track[index].enabled = ((word >> (8 + index)) & 1) != 0;
++            config(staged_, index).enabled = ((word >> (8 + (index == mix_index ? 0 : index))) & 1) != 0;
 +    }
 +
 +    TrackInserts inserts_;
 +    ProjectSettings pending_{}, staged_{};
++    TrackSettings mix_ = mix_defaults();
++    Processor mix_processor_;
++    i32 mix_buffer_[2 * opxy::block_frames]{};
++    i32 mix_wet_ = 0;
 +    u32 last_track_ = TrackInserts::track_count;
 +    u32 sequence_ = 0, index_ = 0, end_ = 0, slot_ = 0;
 +    bool reading_ = false, reset_ = false, changed_ = false, reset_pending_ = false;
++    bool mix_changed_ = false, mix_reset_ = false;
 +};
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..b86aaed
+index 0000000..402b70b
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,376 @@
+@@ -0,0 +1,454 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
@@ -557,20 +647,28 @@ index 0000000..b86aaed
 +using opxy::u32;
 +namespace q31 = opxy::q31;
 +
++enum Focus { Stereo, Mid, Side, Mono };
++enum Character { Drum, Pad, Mix };
++
 +struct Controls {
++    constexpr Controls(i32 d = q31::maximum, i32 c = Drum) : depth(d), character(c) {}
 +    i32 depth = q31::maximum;
 +    i32 time = q31::maximum / 2;
 +    i32 low_trim = q31::maximum / 2;
 +    i32 high_trim = q31::maximum / 2;
++    i32 crossover = q31::maximum / 2;
 +    i32 upward = q31::maximum / 2;
 +    i32 downward = q31::maximum / 2;
 +    i32 level_match = q31::maximum;
++    i32 low_protect = 0;
++    i32 focus = Stereo;
++    i32 character = Drum;
 +};
 +
 +class Processor {
 +    static constexpr i32 db_unit = 1 << 16;
 +    // Keep the installed build's gain timing around transients.
-+    static constexpr i32 gain_period = 4;
++
 +
 +    struct Coefficients {
 +        i32 g_q31, damping_q31, input_q31;
@@ -580,6 +678,10 @@ index 0000000..b86aaed
 +    // three multiplies. The Q28 state protects quiet-band precision.
 +    struct Filter {
 +        i32 integrator1 = 0, integrator2 = 0;
++        void fold(const Filter& right) {
++            integrator1 = static_cast<i32>((static_cast<i64>(integrator1) + right.integrator1) >> 1);
++            integrator2 = static_cast<i32>((static_cast<i64>(integrator2) + right.integrator2) >> 1);
++        }
 +        i32 tick(i32 input, const Coefficients& coefficients, i32& low) {
 +            const i32 delta1 = rounded(coefficients.input_q31, input - integrator2) -
 +                               rounded(coefficients.damping_q31, integrator1);
@@ -594,9 +696,15 @@ index 0000000..b86aaed
 +
 +    struct Split {
 +        Filter lower[2], upper[2], phase;
-+        void tick(i32 input, i32 (&bands)[3]) {
++        void fold(const Split& right) {
++            for (u32 i = 0; i < 2; ++i) {
++                lower[i].fold(right.lower[i]);
++                upper[i].fold(right.upper[i]);
++            }
++            phase.fold(right.phase);
++        }
++        void tick(i32 input, i32 (&bands)[3], const Coefficients& upper_coeff) {
 +            constexpr Coefficients lower_coeff{13508514, 19018953, 13388877};
-+            constexpr Coefficients upper_coeff{386551232, 478837775, 300359502};
 +            i32 lower_low;
 +            const i32 lower_mid = lower[0].tick(input, lower_coeff, lower_low);
 +            lower[1].tick(lower_low, lower_coeff, lower_low);
@@ -647,8 +755,13 @@ index 0000000..b86aaed
 +        const bool matching = controls.level_match != 0;
 +        bool silent = true;
 +        bool mono = !stereo_seen_;
++        const bool force_mono = controls.focus == Mono;
 +        i64 dry_power = 0;
 +        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
++            if (force_mono) {
++                const i32 mean = static_cast<i32>((static_cast<i64>(sum[2 * frame]) + sum[2 * frame + 1]) >> 1);
++                sum[2 * frame] = sum[2 * frame + 1] = mean;
++            }
 +            const i32 left = sum[2 * frame], right = sum[2 * frame + 1];
 +            mono = mono && left == right;
 +            silent = silent && left == 0 && right == 0;
@@ -659,7 +772,10 @@ index 0000000..b86aaed
 +            for (u32 i = 0; i < 2 * opxy::block_frames; ++i) sum[i] = 0;
 +            return;
 +        }
-+        if (mono) {
++        update_crossover(controls.crossover);
++        if ((mono && controls.focus != Side) || force_mono) {
++            if (force_mono && stereo_seen_) split_[0].fold(split_[1]);
++            stereo_seen_ = false;
 +            process_channels<1>(sum, controls, dry_power);
 +            return;
 +        }
@@ -683,16 +799,22 @@ index 0000000..b86aaed
 +            {-3108982,-2732058,2215,32768,1938935,131072,48980,921698,2350907,-1700659,
 +             120875,-80428,25090,63757,3787,-2008,9836,faust_tables::release_high_q22},
 +        };
-+        const i32 added_db = match_db_ - q31::multiply(controls.depth, 6 * db_unit);
-+        const i32 trims[] = {trim_db(controls.low_trim) + added_db, added_db,
-+                             trim_db(controls.high_trim) + added_db};
++        const i32 depth = controls.character == Mix ? controls.depth - controls.depth / 4 : controls.depth;
++        const i32 gain_period = controls.character == Pad ? 8 : 4;
++        const bool focus = channels == 2 && (controls.focus == Mid || controls.focus == Side);
++        const bool side = controls.focus == Side;
++        const i32 added_db = match_db_ - q31::multiply(depth, 6 * db_unit);
++        const i32 protected_depth = controls.low_protect ? q31::multiply(depth, q31::maximum - controls.low_protect) : depth;
++        const i32 trims[] = {trim_db(controls.low_trim) + match_db_ - q31::multiply(protected_depth, 6 * db_unit),
++                             added_db, trim_db(controls.high_trim) + added_db};
 +        i32 rise[3], fall[3], fixed_db[3], release[3];
 +        const i32 downward = down_strength(controls.downward);
 +        for (u32 band = 0; band < 3; ++band) {
 +            const auto& curve = curves[band];
-+            const i32 makeup = depth_curve(controls.depth, curve.makeup_a, curve.makeup_b, curve.makeup_c);
-+            const i32 down = depth_curve(controls.depth, curve.down_a, curve.down_b, curve.down_c);
-+            rise[band] = q31::multiply(controls.depth, q31::multiply(controls.upward, 2 * curve.up_slope));
++            const i32 band_depth = band == 0 ? protected_depth : depth;
++            const i32 makeup = depth_curve(band_depth, curve.makeup_a, curve.makeup_b, curve.makeup_c);
++            const i32 down = depth_curve(band_depth, curve.down_a, curve.down_b, curve.down_c);
++            rise[band] = q31::multiply(band_depth, q31::multiply(controls.upward, 2 * curve.up_slope));
 +            fall[band] = min(db_unit, mul_q16(down, downward));
 +            fixed_db[band] = mul_q16(makeup, curve.makeup);
 +            release[band] = lookup_control(curve.release, controls.time, 6);
@@ -707,14 +829,16 @@ index 0000000..b86aaed
 +        for (u32 frame = 0; frame < opxy::block_frames; ++frame) {
 +            i32 stereo[2][3];
 +            for (u32 ch = 0; ch < channels; ++ch)
-+                split_[ch].tick(q31::shift_right(sum[2 * frame + ch], 3), stereo[ch]);
++                split_[ch].tick(q31::shift_right(sum[2 * frame + ch], 3), stereo[ch], upper_);
 +
 +            i64 wet[2] = {};
 +            for (u32 band = 0; band < 3; ++band) {
 +                auto& state = bands_[band];
 +                const auto& curve = curves[band];
 +                const i64 left_power = square(stereo[0][band]);
-+                const i64 power = channels == 1 ? left_power >> 12
++                const i32 selected = focus ? static_cast<i32>((static_cast<i64>(stereo[0][band]) +
++                    (side ? -static_cast<i64>(stereo[1][band]) : stereo[1][band])) >> 1) : 0;
++                const i64 power = focus ? square(selected) >> 12 : channels == 1 ? left_power >> 12
 +                    : (left_power + square(stereo[1][band])) >> 13;
 +                const i64 delta = power - state.envelope;
 +                const i32 coefficient = delta > 0 ? curve.attack : release[band];
@@ -741,14 +865,22 @@ index 0000000..b86aaed
 +                            trims[band];
 +                        const i32 next = gain_linear(gain_db);
 +                        if (!initialized_ && frame == 0) state.gain = next;
-+                        state.step = (next - state.gain) / gain_period;
++                        const i32 change = next - state.gain;
++                        state.step = gain_period == 8 ? change / 8 : change / 4;
 +                    } else {
 +                        state.step = 0;
 +                    }
 +                }
 +                state.gain += state.step;
-+                for (u32 ch = 0; ch < channels; ++ch)
-+                    wet[ch] += q31::wide(stereo[ch][band], state.gain) >> 22;
++                if (focus) {
++                    // Preserve the other component with the same crossover phase.
++                    const i64 delta = (q31::wide(selected, state.gain) >> 22) - (selected >> 3);
++                    wet[0] += (stereo[0][band] >> 3) + delta;
++                    wet[1] += (stereo[1][band] >> 3) + (side ? -delta : delta);
++                } else {
++                    for (u32 ch = 0; ch < channels; ++ch)
++                        wet[ch] += q31::wide(stereo[ch][band], state.gain) >> 22;
++                }
 +            }
 +            for (u32 ch = 0; ch < channels; ++ch) {
 +                const i64 sample = wet[ch];
@@ -773,6 +905,7 @@ index 0000000..b86aaed
 +
 +    static constexpr u32 tail_blocks = 128;
 +    Split split_[2];
++    Coefficients upper_{};
 +    Band bands_[3];
 +    u32 silent_blocks_ = 0;
 +    bool stereo_seen_ = false;
@@ -781,6 +914,41 @@ index 0000000..b86aaed
 +    i32 match_db_ = 0;
 +    u32 metered_blocks_ = 0;
 +    i64 dry_meter_ = 0, wet_meter_ = 0;
++
++    void update_crossover(i32 value) {
++        static constexpr Coefficients table[] = {
++            {153241600, 205831576, 138553731},
++            {171913037, 229438324, 153545754},
++            {192881213, 255574278, 169926218},
++            {216437611, 284467224, 187767122},
++            {242914398, 316355158, 207129621},
++            {272691594, 351484203, 228059456},
++            {306206086, 390105831, 250581551},
++            {343963121, 432473373, 274693727},
++            {386551232, 478837775, 300359502},
++            {441034953, 536007777, 330953480},
++            {503675124, 598857507, 363217883},
++            {575925858, 667681783, 396862700},
++            {659614139, 742734035, 431478353},
++            {757088165, 824217000, 466513223},
++            {871447840, 912275716, 501246790},
++            {1006915555, 1006993896, 534754653},
++            {1169457264, 1108394012, 565858057},
++        };
++        const u32 segment = static_cast<u32>(value) >> 27;
++        const i32 fraction = (value & ((1 << 27) - 1)) * 16;
++        const auto& a = table[segment];
++        const auto& b = table[segment + 1];
++        const auto& center = table[8];
++        auto update = [&](i32 current, i32 low, i32 high, i32 middle) {
++            const i32 target = value == q31::maximum / 2 ? middle : low + q31::multiply(high - low, fraction);
++            const i32 delta = target - current;
++            return !initialized_ || (delta >= -8 && delta <= 8) ? target : current + delta / 8;
++        };
++        upper_.g_q31 = update(upper_.g_q31, a.g_q31, b.g_q31, center.g_q31);
++        upper_.damping_q31 = update(upper_.damping_q31, a.damping_q31, b.damping_q31, center.damping_q31);
++        upper_.input_q31 = update(upper_.input_q31, a.input_q31, b.input_q31, center.input_q31);
++    }
 +
 +    static i64 meter_square(i64 sample) {
 +        constexpr i32 bound = 8 << 15;
@@ -919,10 +1087,10 @@ index 0000000..b86aaed
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp b/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp
 new file mode 100644
-index 0000000..b6398f0
+index 0000000..406b667
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/track_insert.hpp
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,85 @@
 +#pragma once
 +
 +#include "ott.hpp"
@@ -932,6 +1100,7 @@ index 0000000..b6398f0
 +// Track indices are zero-based. The SDK adapter owns project settings and
 +// hands a complete snapshot to configure() on the audio role.
 +struct TrackSettings {
++    constexpr TrackSettings(Controls config = {}) : controls(config) {}
 +    bool enabled = false;
 +    Controls controls;
 +};
@@ -1009,10 +1178,10 @@ index 0000000..b6398f0
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_hooks.s b/sdk/platform/opxy-1.2.1/ott_hooks.s
 new file mode 100644
-index 0000000..2fda65f
+index 0000000..1328095
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_hooks.s
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,97 @@
 +.section .text
 +.align 2
 +
@@ -1063,12 +1232,59 @@ index 0000000..2fda65f
 +sdk_ott_stock_off_popup:
 +    LINK 16;
 +    resume sdk_ott_stock_off_popup, 0x8d53, 0xa6ac
++
++/* MIX OTT stock trampolines */
++/* Entry trampolines replay exactly the eight bytes redirected in stock 1.2.1.
++ * Their C++ callers use ordinary ABI calls; stock epilogues return to them.
++ * P0 is caller-saved and is not live at these entry continuations.
++ */
++.section .text
++.align 2
++.global sdk_master_stock_buttons
++.type sdk_master_stock_buttons, STT_FUNC
++sdk_master_stock_buttons:
++    LINK 0;
++    [--SP] = (R7:5, P5:3);
++    P4 = R1;
++    P0.H = 0x8c09; P0.L = 0x3a78;
++    JUMP (P0);
++.size sdk_master_stock_buttons, .-sdk_master_stock_buttons
++
++.global sdk_master_stock_shift_buttons
++.type sdk_master_stock_shift_buttons, STT_FUNC
++sdk_master_stock_shift_buttons:
++    P1 = R1;
++    LINK 12;
++    R1 = 12;
++    P0.H = 0x8c09; P0.L = 0x3934;
++    JUMP (P0);
++.size sdk_master_stock_shift_buttons, .-sdk_master_stock_shift_buttons
++
++.global sdk_master_stock_turn
++.type sdk_master_stock_turn, STT_FUNC
++sdk_master_stock_turn:
++    R3 = 8;
++    CC = R1 < R3 (IU);
++    LINK 12;
++    P0.H = 0x8c09; P0.L = 0x3890;
++    JUMP (P0);
++.size sdk_master_stock_turn, .-sdk_master_stock_turn
++
++.global sdk_master_stock_frame
++.type sdk_master_stock_frame, STT_FUNC
++sdk_master_stock_frame:
++    LINK 144;
++    [--SP] = (R7:4, P5:3);
++    SP += -20;
++    P0.H = 0x8d53; P0.L = 0x7d0c;
++    JUMP (P0);
++.size sdk_master_stock_frame, .-sdk_master_stock_frame
 diff --git a/sdk/platform/opxy-1.2.1/ott_insert.cpp b/sdk/platform/opxy-1.2.1/ott_insert.cpp
 new file mode 100644
-index 0000000..9dd3486
+index 0000000..c288a5a
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_insert.cpp
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,307 @@
 +#include "ott_filter/firmware_runtime.hpp"
 +#include "ott_project.hpp"
 +#include "opxy/draw.hpp"
@@ -1094,6 +1310,15 @@ index 0000000..9dd3486
 +void sdk_ott_filter(void*, u32, void*) __asm__("sdk_ott_filter");
 +void sdk_ott_receive(u32, u32, i32) __asm__("sdk_ott_receive");
 +u32 sdk_ott_activate() __asm__("sdk_ott_activate");
++u32 sdk_master_buttons(void*, const u32*) __asm__("sdk_master_buttons");
++u32 sdk_master_shift_buttons(void*, const u32*) __asm__("sdk_master_shift_buttons");
++void sdk_master_turn(void*, u32, const i32*) __asm__("sdk_master_turn");
++void sdk_master_frame(void*, i32) __asm__("sdk_master_frame");
++void sdk_master_process(void*, i32*, i32*) __asm__("sdk_master_process");
++u32 sdk_master_stock_buttons(void*, const u32*) __asm__("sdk_master_stock_buttons");
++u32 sdk_master_stock_shift_buttons(void*, const u32*) __asm__("sdk_master_stock_shift_buttons");
++void sdk_master_stock_turn(void*, u32, const i32*) __asm__("sdk_master_stock_turn");
++void sdk_master_stock_frame(void*, i32) __asm__("sdk_master_stock_frame");
 +}
 +
 +namespace {
@@ -1106,11 +1331,12 @@ index 0000000..9dd3486
 +ott::ProjectSettings pending_project{};
 +u32 current_project, loading_project, sequence, voices;
 +bool limit_hit;
++void* active_mixer;
 +
 +void publish(u32 selection, bool reset) {
-+    ott::publish(controls.project(), selection, reset, ++sequence, [](u32 id, i32 value) {
-+        stock<void(u32, i32)>(0x8d4dc84c)(id, value);
-+    });
++    const auto send = [](u32 id, i32 value) { stock<void(u32, i32)>(0x8d4dc84c)(id, value); };
++    ott::publish(controls.project(), selection, reset, ++sequence, send);
++    if (!selection) ott::publish(controls.project(), ott::mix_index + 1, reset, ++sequence, send);
 +}
 +
 +bool instrument_is_top() {
@@ -1121,7 +1347,15 @@ index 0000000..9dd3486
 +u32 select() {
 +    const u32 track = opxy::platform::selected_track();
 +    controls.select(track, opxy::platform::word(kInstrumentPage) == kEnvelopePage ? ott::Page::envelope : ott::Page::other);
++    if (track < ott::TrackInserts::track_count) active_mixer = nullptr;
 +    return track;
++}
++
++i32 dial(const i32* event) {
++    if (!event[0]) return 0;
++    const auto count = event[1] < 0 ? -static_cast<opxy::i64>(event[1]) : event[1];
++    const i32 detents = count < 1 ? 1 : count > 8 ? 8 : static_cast<i32>(count);
++    return event[0] < 0 ? -detents : detents;
 +}
 +
 +bool handled(ott::InputResult result, u32 track) {
@@ -1131,14 +1365,14 @@ index 0000000..9dd3486
 +    return true;
 +}
 +
-+using Display = opxy::draw::Frame<0, 0, 4, 7, 1>;
++using Display = opxy::draw::Frame<0, 0, 5, 7, 1>;
 +using Renderer = RetainedDrawing<Display>;
 +using Object = Renderer::Object;
 +Object object{};
 +Display display{};
 +bool constructed, bound;
 +const char* const ids[] = {
-+    "ott_marker1", "ott_marker2", "ott_marker3", "ott_marker4",
++    "ott_marker1", "ott_marker2", "ott_marker3", "ott_marker4", "ott_popup",
 +    "ott_title", "ott_status", "ott_help", "ott_label1", "ott_label2", "ott_label3", "ott_label4",
 +    "ott_marker1"
 +};
@@ -1185,9 +1419,11 @@ index 0000000..9dd3486
 +        status[17] = 'N';
 +        status[18] = 0;
 +    }
-+    line(0, 14, 30, title);
-+    line(1, 14, 59, status);
-+    line(2, 14, 190, limit_hit ? "Four-track limit" : "Click White: On/Off");
++    line(0, 14, 30, panel.track_number ? title : "OTT   MIX");
++    opxy::draw::place(display, 4, panel.shifted ? 0 : 500*1024, 0, 1024, 0, opxy::draw::keep);
++    line(1, 14, 59, panel.track_number ? status : panel.enabled ? "MIX ON" : "MIX BYPASS");
++    line(2, 14, 190, limit_hit ? "Four-track limit" :
++        panel.shifted ? "OTT OPTIONS" : "White: On/Off | Shift");
 +    for (u32 i = 0; i < 4; ++i) {
 +        const i32 x = 14 + static_cast<i32>(i) * 117;
 +        line(3 + i, x, 104, panel.encoders[i].label);
@@ -1214,13 +1450,14 @@ index 0000000..9dd3486
 +}
 +
 +u32 sdk_ott_dispatch_shift(void* controller, const u32* event) {
++    if (!controller) return 0;
 +    const auto* methods = *static_cast<const u32* const*>(controller);
++    if (!methods) return 0;
 +    if (reinterpret_cast<u32>(methods) == kInstrumentController && event) {
++        const u32 track = select();
 +        const u32 key = event[0];
-+        if (key >= 6 && key <= 9) {
-+            select();
-+            controls.module(key - 5, true);
-+        }
++        if (key >= 6 && key <= 9) controls.module(key - 5, true);
++        if (key >= 10 && key <= 13 && handled(controls.click(key - 10, true), track)) return 1;
 +    }
 +    return stock<u32(void*, const u32*)>(methods[4])(controller, event);
 +}
@@ -1228,21 +1465,21 @@ index 0000000..9dd3486
 +void sdk_ott_turn(void* controller, u32 position, const i32* event) {
 +    if (controller && event && position < 8) {
 +        const u32 track = select();
-+        if (handled(controls.turn(position & 3, opxy::platform::shift_held(), event[1], 0), track)) return;
++        if (handled(controls.turn(position & 3, opxy::platform::shift_held(), dial(event), 0), track)) return;
 +    }
 +    sdk_ott_stock_turn(controller, position, event);
 +}
 +
 +void sdk_ott_draw(Base* screen, u32 flags) {
-+    // The instrument selector returns the regular ADSR or dynamics envelope
-+    // by engine. It also has special M2 slots for held drum pads and MIDI.
-+    if (screen && (screen->page == 24 || screen->page == 25 || screen->page == 9 || screen->page == 11) &&
-+        opxy::platform::word(kInstrumentPage) == kEnvelopePage && instrument_is_top()) {
++    // The M2 screen ID varies with the engine and the Shift layer. Replace
++    // only the screen selected by the stock instrument controller.
++    if (screen && opxy::platform::word(kInstrumentPage) == kEnvelopePage &&
++        controls.page() == ott::Page::ott && instrument_is_top()) {
 +        const u32 selected_screen = stock<u32()>(0x8c0b1198)();
 +        if (screen->page == selected_screen) {
 +            select();
 +            ott::Panel panel{};
-+            if (controls.panel(panel) && draw_panel(panel)) return;
++            if (controls.panel(panel, opxy::platform::shift_held()) && draw_panel(panel)) return;
 +        }
 +    }
 +    sdk_ott_stock_draw(screen, flags);
@@ -1271,6 +1508,61 @@ index 0000000..9dd3486
 +
 +void sdk_ott_receive(u32 base, u32 id, i32 value) {
 +    if (!audio.receive(id, value)) stock<void(u32, u32, i32)>(0x8d50eb8c)(base, id, value);
++}
++
++namespace {
++bool on_mix_eq(const void* controller) {
++    return controller && static_cast<const u32*>(controller)[0x88 / 4] == 1;
++}
++bool mix_open() {
++    return active_mixer && stock<void*()>(0x8c0944b0)() == active_mixer &&
++        on_mix_eq(active_mixer) && controls.is_mix() && controls.page() == ott::Page::ott;
++}
++}
++
++u32 sdk_master_buttons(void* controller, const u32* event) {
++    if (controller && event) {
++        const u32 key = event[0];
++        controls.select_mix(on_mix_eq(controller));
++        if (key == 7 && on_mix_eq(controller)) {
++            active_mixer = controller;
++            controls.module(2, false);
++            limit_hit = false;
++            return 1;
++        }
++        if (key >= 10 && key <= 13 && mix_open() &&
++            handled(controls.click(key - 10, false), ott::mix_index)) return 1;
++        if (key >= 6 && key <= 9) {
++            controls.module(key - 5, false);
++            active_mixer = nullptr;
++        }
++    }
++    return sdk_master_stock_buttons(controller, event);
++}
++
++u32 sdk_master_shift_buttons(void* controller, const u32* event) {
++    if (controller && event && mix_open() && event[0] >= 10 && event[0] <= 13) return 1;
++    return sdk_master_stock_shift_buttons(controller, event);
++}
++
++void sdk_master_turn(void* controller, u32 position, const i32* event) {
++    if (event && position < 8 && mix_open() &&
++        handled(controls.turn(position & 3, opxy::platform::shift_held(), dial(event), 0), ott::mix_index))
++        return;
++    sdk_master_stock_turn(controller, position, event);
++}
++
++void sdk_master_frame(void* screen, i32 elapsed) {
++    if (mix_open()) {
++        ott::Panel panel{};
++        if (controls.panel(panel, opxy::platform::shift_held()) && draw_panel(panel)) return;
++    }
++    sdk_master_stock_frame(screen, elapsed);
++}
++
++void sdk_master_process(void* context, i32* left, i32* right) {
++    stock<void(void*, i32*, i32*)>(0x11a02c10)(context, left, right);
++    audio.process_mix(left, right);
 +}
 +
 +void ott_bind_project(u32 project) { loading_project = project; }

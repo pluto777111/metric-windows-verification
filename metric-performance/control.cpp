@@ -2,12 +2,14 @@
 #include "metric_engine.hpp"
 #include "core.h"
 #include "native_performance.hpp"
+#include "metric2.hpp"
 #include "metric_visual.hpp"
 
 namespace metric {
 using opxy::u32;
 using opxy::i32;
-constexpr u32 kVersion = 0x4d545237; // MTR7
+constexpr u32 kVersion = 0x4d545238; // MTR8
+constexpr u32 kPreviousVersion = 0x4d545237;
 
 struct ControlState {
   u32 version;
@@ -25,6 +27,8 @@ struct ControlState {
   uint16_t step_cues[cue_patterns][cue_steps];
   uint8_t route_choices[4];
   bool editing_routes;
+  bool metric2_enabled;
+  metric2::State development;
   Performance performance;
 };
 
@@ -107,6 +111,11 @@ inline void edit_performance(ControlState& st, const opxy::control::Input& in) {
     const unsigned knob=turn.slot%4;
     const auto detents=turn.direction;
     if(!detents) {
+      if(p.page==4 && !in.shift && knob==0 && !edit_step) {
+        st.metric2_enabled=!st.metric2_enabled;
+        st.development.clear();
+        st.generated=0;
+      }
       if(p.page==2 && knob==1 && !in.shift) p.editing_octave=!p.editing_octave;
       if(p.page==3 && !in.shift) p.editing_lane_octaves=!p.editing_lane_octaves;
       if(p.page==4 && knob==3 && !in.shift) p.editing_anchor_scale=!p.editing_anchor_scale;
@@ -231,6 +240,8 @@ inline void ensure_bar(ControlState& st,u32 index,const opxy::control::Input& in
       render_shared_phrase(st.performance,st.settings,index,st.bar,st.lanes);
     }
   }
+  if(st.metric2_enabled)
+    metric2::develop(st.development,st.bar,st.lanes,p,cues,index,st.settings.phrase_bars);
   if(in.read_pattern) protect_programmed_notes(st,index,in);
   st.view=metric_visual::phrase_view(st.bar,st.lanes,p.output==static_cast<unsigned>(OutputMode::drum));
   st.current_bar=index;
@@ -242,6 +253,8 @@ inline void control_reset(ControlState& st) {
   st.sent_a=0; st.sent_b=0;
   st.view={};
   st.editing_routes=false;
+  st.metric2_enabled=false;
+  st.development.clear();
   for(auto& choice : st.route_choices)choice=0;
   st.host_pattern=st.host_cycle=0;
   for(auto& pattern : st.step_cues)for(auto& cue : pattern)cue=0;
@@ -279,7 +292,7 @@ inline u32 control_save(const ControlState& st, opxy::u8* data,u32 capacity) {
   for(u32 i=0;i<4;++i)data[i]=static_cast<opxy::u8>(kVersion>>(8*i));
   if(capacity<10)return 4;
   data[4]=st.performance.target_c | st.performance.off_mask<<4;
-  data[5]=st.performance.target_d;
+  data[5]=st.performance.target_d | static_cast<unsigned>(st.metric2_enabled)<<7;
   for(u32 i=0;i<4;++i)data[6+i]=st.performance.lane_octave[i]+2;
   u32 last=10;
   for(u32 pattern=0;pattern<cue_patterns;++pattern)for(u32 step=0;step<cue_steps;++step) {
@@ -295,10 +308,13 @@ inline u32 control_save(const ControlState& st, opxy::u8* data,u32 capacity) {
 inline void control_load(ControlState& st,const opxy::u8* data,u32 size) {
   control_reset(st);
   if(!data || size<10 || size>10+2*cue_patterns*cue_steps || size%2)return;
-  for(u32 i=0;i<4;++i)if(data[i]!=static_cast<opxy::u8>(kVersion>>(8*i)))return;
+  u32 version=0;
+  for(u32 i=0;i<4;++i)version|=static_cast<u32>(data[i])<<(8*i);
+  if(version!=kVersion && version!=kPreviousVersion)return;
   if(!(data[4]&8))st.performance.target_c=data[4]&7;
   st.performance.off_mask=data[4]>>4;
-  if(data[5]<8)st.performance.target_d=data[5];
+  if((data[5]&127)<8)st.performance.target_d=data[5]&7;
+  st.metric2_enabled=version==kVersion && (data[5]&128);
   for(u32 i=0;i<4;++i)if(data[6+i]<5)st.performance.lane_octave[i]=static_cast<int>(data[6+i])-2;
   for(u32 at=10;at<size;at+=2) {
     const unsigned cue=data[at] | static_cast<unsigned>(data[at+1])<<8;
@@ -331,6 +347,7 @@ inline void control(ControlState& st,const opxy::control::Input& in,opxy::contro
   overlay.own_turns=st.performance.page>=2;
   if(!in.transport.playing) {
     st.playing=0; st.generated=0; st.next_tick=now;
+    if(st.development.valid)st.development.clear();
   } else {
     if(!st.playing) { st.sent_a=0; st.sent_b=0; }
     if(!st.playing || now<st.last_tick || ((now>=st.next_tick) && (now-st.next_tick>metric_core::BAR_TICKS))) {
@@ -384,7 +401,7 @@ inline void control(ControlState& st,const opxy::control::Input& in,opxy::contro
   for(unsigned i=0;i<4;++i)lane_octaves|=static_cast<unsigned>(p.lane_octave[i]+2)<<(4*i);
   overlay.display[13]=in.shift | static_cast<unsigned>(p.editing_octave)<<1 |
     static_cast<unsigned>(p.editing_lane_octaves)<<2 |
-    static_cast<unsigned>(p.editing_anchor_scale)<<3 | lane_octaves<<16 |
+    static_cast<unsigned>(p.editing_anchor_scale)<<3 | static_cast<unsigned>(st.metric2_enabled)<<4 | lane_octaves<<16 |
     static_cast<unsigned>(p.octave+2)<<8;
   const unsigned targets[]={st.values[6],st.values[7],p.target_c,p.target_d};
   unsigned route_bank=0;

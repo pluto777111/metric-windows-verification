@@ -127,8 +127,10 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
   const u32 bar_index=playing?tick/metric_core::BAR_TICKS:0u;
   const unsigned bar_tick=playing?tick%metric_core::BAR_TICKS:0u;
 
+  const bool metric2=(opxy::control::from_control(13)&16)!=0;
   text(frame,16,12*unit,55*unit,unit,
-       page==4 ? "METRIC / ANCHORS" : page==3 ? "METRIC / OUTPUT" :
+       metric2 ? (page==4 ? "METRIC 2 / ANCHORS" : page==3 ? "METRIC 2 / OUTPUT" :
+       page==2 ? "METRIC 2 / EVOLUTION" : "METRIC 2 / TWO CLOCKS") : page==4 ? "METRIC / ANCHORS" : page==3 ? "METRIC / OUTPUT" :
        audition ? "METRIC / EVOLUTION" : "METRIC   /   TWO CLOCKS");
   if(audition) {
     for(unsigned i=8;i<42;++i)hide(frame,i);
@@ -156,6 +158,9 @@ inline void display(DisplayState& state,const opxy::draw::Input& input,Frame& fr
       }
       if(playing)place(frame,40,metric_visual::xpos(bar_tick)*unit,200*unit,unit,8,fill_and_stroke);
       else text(frame,17,12*unit,85*unit,unit,"PLAY TO SEE NOTES");
+    } else if(page==4 && (opxy::control::from_control(13)&1u) && !opxy::control::from_control(8)) {
+      text(frame,17,12*unit,85*unit,unit,metric2 ? "ENGINE: METRIC 2" : "ENGINE: METRIC 1");
+      text(frame,19,12*unit,123*unit,unit,"BLACK CLICK TO SWITCH");
     } else if(page==4 && opxy::control::from_control(7)>0) {
       const unsigned cycle=opxy::control::from_control(4), phase=opxy::control::from_control(5);
       const unsigned markers=opxy::control::from_control(6), steps=opxy::control::from_control(7);

@@ -80,10 +80,31 @@ int main() {
     auto four = run_mix(audio, mixer);
     for (u32 track = 0; track < mixer.size(); ++track) assert((four[track] != mixer[track]) == (track < 4));
 
+
+    ui.select_mix(true);
+    assert(ui.module(2, false) == ott::InputResult::page_changed);
+    ott::Panel mix_panel{};
+    assert(ui.panel(mix_panel, true) && mix_panel.track_number == 0 &&
+           std::strcmp(mix_panel.encoders[0].label, "Crossover") == 0 &&
+           std::strcmp(mix_panel.encoders[1].label, "Low Protect") == 0 &&
+           std::strcmp(mix_panel.encoders[2].label, "Upward") == 0 &&
+           std::strcmp(mix_panel.encoders[3].label, "Downward") == 0);
+    assert(ui.click(3, true) == ott::InputResult::handled && !ui.project().mix.enabled);
+    assert(ui.click(3, false) == ott::InputResult::settings_changed);
+    ott::publish(ui.project(), ott::mix_index + 1, false, 7, send);
+    opxy::i32 left[opxy::block_frames], right[opxy::block_frames];
+    for (u32 i = 0; i < opxy::block_frames; ++i) {
+        left[i] = mixer[0][2*i];
+        right[i] = mixer[0][2*i+1];
+    }
+    audio.process_mix(left, right);
+    assert(left[opxy::block_frames-1] != mixer[0][2*(opxy::block_frames-1)]);
+    assert(run_mix(audio, mixer)[4] == mixer[4]);
+
     ott::Byte bytes[ott::project_bytes]{}, roundtrip[ott::project_bytes]{};
     assert(ott::encode_project(ui.project(), bytes) == sizeof bytes);
     ott::ProjectSettings restored{};
-    assert(ott::decode_project(bytes, sizeof bytes, restored));
+    assert(ott::decode_project(bytes, sizeof bytes, restored) && restored.mix.enabled);
     ott::Byte legacy_v1[1 + ott::TrackInserts::track_count * (1 + 4 * 9)] = {1};
     ott::Byte legacy_v2[1 + ott::TrackInserts::track_count * (1 + 4 * 12)] = {2};
     legacy_v1[1] = legacy_v2[1] = 1;
@@ -93,7 +114,7 @@ int main() {
     assert(!defaults.track[0].enabled && defaults.track[0].controls.depth == ott::q31::maximum);
     constexpr u32 shared = 1 + 4 * 6;
     constexpr u32 current_track_bytes = 1 + 4 * ott::parameter_count;
-    constexpr u32 old_track_bytes = current_track_bytes + 4;
+    constexpr u32 old_track_bytes = 1 + 4 * 8;
     ott::Byte legacy_v3[1 + ott::TrackInserts::track_count * old_track_bytes] = {3};
     for (u32 track = 0; track < ott::TrackInserts::track_count; ++track) {
         const auto* from = bytes + 1 + track * current_track_bytes;
@@ -107,7 +128,7 @@ int main() {
            migrated.track[0].controls.depth == restored.track[0].controls.depth &&
            migrated.track[0].controls.high_trim == restored.track[0].controls.high_trim &&
            migrated.track[0].controls.level_match == ott::q31::maximum &&
-           restored.track[0].controls.level_match == 0);
+           restored.track[0].controls.level_match == 0 && !migrated.mix.enabled);
     auto corrupt = restored;
     corrupt.track[4].enabled = true;
     ott::encode_project(corrupt, roundtrip);

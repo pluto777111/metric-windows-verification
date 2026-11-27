@@ -144,22 +144,22 @@ void test_device_controls(const Block& input) {
             controller.project().track[0].controls.level_match < before.level_match &&
             controller.project().track[0].controls.time == before.time,
             "Level Match must have independent storage");
-    require(controller.turn(0, true, 5, 0) == InputResult::handled &&
-            controller.click(3, true) == InputResult::stock,
+    require(controller.turn(0, true, 5, 0) == InputResult::settings_changed &&
+            controller.click(3, true) == InputResult::handled,
             "Shift must stay out of the OTT toggle");
     require(controller.click(1, false) == InputResult::page_changed &&
             controller.click(2, false) == InputResult::page_changed &&
             controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Level Match") == 0 &&
-            std::strcmp(panel.encoders[1].label, "Upward") == 0 &&
-            std::strcmp(panel.encoders[2].label, "Downward") == 0 && !panel.enabled,
+            std::strcmp(panel.encoders[1].label, "Drum") == 0 &&
+            std::strcmp(panel.encoders[2].label, "Stereo") == 0 && !panel.enabled,
             "A refinement click must switch only its own encoder");
     require(controller.click(0, false) == InputResult::page_changed &&
             controller.click(2, false) == InputResult::page_changed &&
             controller.panel(panel) && std::strcmp(panel.encoders[0].label, "Time") == 0 &&
             std::strcmp(panel.encoders[2].label, "High") == 0,
             "A second click must return to the main control without opening another choice");
-    require(controller.turn(1, false, 127, 3) == InputResult::settings_changed &&
-            controller.project().track[0].controls.upward == full,
+    require(controller.turn(1, true, 127, 3) == InputResult::settings_changed &&
+            controller.project().track[0].controls.low_protect == full,
             "Large turns must clamp without overflow");
     require(controller.turn(3, false, -15, 0) == InputResult::settings_changed &&
             controller.panel(panel) && !panel.enabled && panel.encoders[3].value < full,
@@ -188,7 +188,7 @@ void test_device_controls(const Block& input) {
             "The fifth track's panel must report four slots in use");
     require(controller.module(2, true) == InputResult::stock && controller.page() == Page::envelope,
             "Shift+M2 must fall through to stock");
-    controller.select(8, Page::envelope);
+    controller.select(9, Page::envelope);
     require(controller.module(2, false) == InputResult::stock, "Aux tracks must remain stock");
 
     const auto saved = controller.project();

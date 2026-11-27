@@ -10,6 +10,14 @@ const sourceProfile = readFileSync(profilePath);
 if (digest(sourceProfile) !== PROFILE_SHA256) throw new Error('The OTT profile differs from its reviewed digest');
 const profile = JSON.parse(sourceProfile);
 const expanded = expandedProfile(profile);
+const mixHooks = new Set(['sdk_master_buttons', 'sdk_master_shift_buttons',
+  'sdk_master_turn', 'sdk_master_frame', 'sdk_master_process']);
+for (const hook of expanded.patches) {
+  if (!mixHooks.delete(hook.symbol)) continue;
+  if (hook.service !== 'master_filter') throw new Error('Unexpected stock MIX hook');
+  hook.service = 'ott_insert';
+}
+if (mixHooks.size) throw new Error('Missing verified MIX EQ hook sites');
 const sourceLinker = readFileSync(linkerPath);
 if (digest(sourceLinker) !== profile.linker_sha256) throw new Error('The stock linker script differs from the profile');
 const region = p => `ORIGIN = 0x${p.module_base.toString(16)}, LENGTH = 0x${(p.reserved_bytes - p.table_bytes).toString(16)}`;
