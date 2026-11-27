@@ -534,10 +534,10 @@ index 0000000..fbfd246
 +}
 diff --git a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
 new file mode 100644
-index 0000000..e403c10
+index 0000000..9d75cbf
 --- /dev/null
 +++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
-@@ -0,0 +1,314 @@
+@@ -0,0 +1,316 @@
 +#pragma once
 +
 +#include <opxy/audio.hpp>
@@ -567,7 +567,9 @@ index 0000000..e403c10
 +
 +class Processor {
 +    static constexpr i32 db_unit = 1 << 16;
-+    static constexpr i32 gain_period = 4;
++    // Keep the audio and detectors at full rate. Interpolate the gain
++    // between curve evaluations, about every 0.36 ms at 44.1 kHz.
++    static constexpr i32 gain_period = 16;
 +
 +    struct Coefficients {
 +        i32 g_q31, damp_q30, normalizer_q31;
