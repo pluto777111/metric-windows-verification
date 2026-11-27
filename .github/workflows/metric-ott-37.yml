@@ -3,7 +3,7 @@ name: METRIC + OTT with the full 37-machine collection
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/metric-ott-37-machines', 'codex/metric2-ott-mix-37', 'codex/ott-efficiency-37']
+    branches: ['codex/metric-ott-37-machines', 'codex/metric2-ott-mix-37', 'codex/ott-efficiency-37', 'codex/ott-onepole-37']
     paths:
       - '.github/workflows/metric-ott-37.yml'
       - 'metric-performance/**'
@@ -14,6 +14,7 @@ on:
       - 'ott-tests/**'
       - 'sdk-ott-insert.patch'
       - 'ott-rounded-multiply.patch'
+      - 'ott-onepole-phase-fix.patch'
       - 'sdk-scaled-pattern-input.patch'
 
 permissions:
@@ -39,7 +40,7 @@ jobs:
         run: |
           printf '%s  source.zip\n' c28f62389d6813b4edb54e6db6141b15b37fde5acf609cdf05b8324ed3aed04f | shasum -a 256 -c
           python3 -m zipfile -e source.zip "$RUNNER_TEMP/metric-inputs"
-          for patch in sdk-scaled-pattern-input.patch sdk-ott-insert.patch ott-rounded-multiply.patch; do
+          for patch in sdk-scaled-pattern-input.patch sdk-ott-insert.patch ott-rounded-multiply.patch ott-onepole-phase-fix.patch; do
             git -C "$RUNNER_TEMP/metric-inputs/open-xy" -c core.autocrlf=false apply --check "$GITHUB_WORKSPACE/$patch"
             git -C "$RUNNER_TEMP/metric-inputs/open-xy" -c core.autocrlf=false apply "$GITHUB_WORKSPACE/$patch"
           done
@@ -106,13 +107,13 @@ jobs:
           import os
           from pathlib import Path
 
-          for name in ('sdk-scaled-pattern-input.patch', 'sdk-ott-insert.patch', 'ott-rounded-multiply.patch'):
+          for name in ('sdk-scaled-pattern-input.patch', 'sdk-ott-insert.patch', 'ott-rounded-multiply.patch', 'ott-onepole-phase-fix.patch'):
               original = Path(os.environ['GITHUB_WORKSPACE']) / name
               normalized = Path(os.environ['RUNNER_TEMP']) / name
               normalized.write_bytes(original.read_bytes().replace(bytes([13, 10]), bytes([10])))
           '@ | python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          foreach ($name in @('sdk-scaled-pattern-input.patch', 'sdk-ott-insert.patch', 'ott-rounded-multiply.patch')) {
+          foreach ($name in @('sdk-scaled-pattern-input.patch', 'sdk-ott-insert.patch', 'ott-rounded-multiply.patch', 'ott-onepole-phase-fix.patch')) {
             $patch = Join-Path $env:RUNNER_TEMP $name
             git -c core.autocrlf=false apply --check $patch
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

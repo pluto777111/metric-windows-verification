@@ -1,0 +1,106 @@
+--- a/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
++++ b/sdk/platform/opxy-1.2.1/ott_filter/ott.hpp
+@@ -38,7 +38,7 @@
+ 
+ 
+     struct Coefficients {
+-        i32 g_q31, damping_q31, input_q31;
++        i32 g_q31, damping_q31, input_q31, phase_q31;
+     };
+ 
+     // Rearrange the SVF integrators so the lowpass and bandpass need only
+@@ -62,16 +62,18 @@
+     };
+ 
+     struct Split {
+-        Filter lower[2], upper[2], phase;
++        Filter lower[2], upper[2];
++        i32 phase_input = 0, phase_output = 0;
+         void fold(const Split& right) {
+             for (u32 i = 0; i < 2; ++i) {
+                 lower[i].fold(right.lower[i]);
+                 upper[i].fold(right.upper[i]);
+             }
+-            phase.fold(right.phase);
++            phase_input = static_cast<i32>((static_cast<i64>(phase_input) + right.phase_input) >> 1);
++            phase_output = static_cast<i32>((static_cast<i64>(phase_output) + right.phase_output) >> 1);
+         }
+         void tick(i32 input, i32 (&bands)[3], const Coefficients& upper_coeff) {
+-            constexpr Coefficients lower_coeff{13508514, 19018953, 13388877};
++            constexpr Coefficients lower_coeff{13508514, 19018953, 13388877, 0};
+             i32 lower_low;
+             const i32 lower_mid = lower[0].tick(input, lower_coeff, lower_low);
+             lower[1].tick(lower_low, lower_coeff, lower_low);
+@@ -84,9 +86,10 @@
+             upper[1].tick(upper_low, upper_coeff, bands[1]);
+             bands[2] = allpass(rest, upper_mid) - bands[1];
+ 
+-            i32 unused_low;
+-            const i32 phase_band = phase.tick(lower_low, upper_coeff, unused_low);
+-            bands[0] = allpass(lower_low, phase_band);
++            // Match the second-order allpass's delay at DC.
++            phase_output = phase_input + rounded(upper_coeff.phase_q31, lower_low - phase_output);
++            phase_input = lower_low;
++            bands[0] = phase_output;
+         }
+ 
+         static i32 allpass(i32 input, i32 band) {
+@@ -306,23 +309,23 @@
+ 
+     void update_crossover(i32 value) {
+         static constexpr Coefficients table[] = {
+-            {153241600, 205831576, 138553731},
+-            {171913037, 229438324, 153545754},
+-            {192881213, 255574278, 169926218},
+-            {216437611, 284467224, 187767122},
+-            {242914398, 316355158, 207129621},
+-            {272691594, 351484203, 228059456},
+-            {306206086, 390105831, 250581551},
+-            {343963121, 432473373, 274693727},
+-            {386551232, 478837775, 300359502},
+-            {441034953, 536007777, 330953480},
+-            {503675124, 598857507, 363217883},
+-            {575925858, 667681783, 396862700},
+-            {659614139, 742734035, 431478353},
+-            {757088165, 824217000, 466513223},
+-            {871447840, 912275716, 501246790},
+-            {1006915555, 1006993896, 534754653},
+-            {1169457264, 1108394012, 565858057},
++            {153241600, 205831576, 138553731, -1941177155},
++            {171913037, 229438324, 153545754, -1917386806},
++            {192881213, 255574278, 169926218, -1890997939},
++            {216437611, 284467224, 187767122, -1861757463},
++            {242914398, 316355158, 207129621, -1829393262},
++            {272691594, 351484203, 228059456, -1793613425},
++            {306206086, 390105831, 250581551, -1754105288},
++            {343963121, 432473373, 274693727, -1710534150},
++            {386551232, 478837775, 300359502, -1662541392},
++            {441034953, 536007777, 330953480, -1602857026},
++            {503675124, 598857507, 363217883, -1536507548},
++            {575925858, 667681783, 396862700, -1462835670},
++            {659614139, 742734035, 431478353, -1381101043},
++            {757088165, 824217000, 466513223, -1290448087},
++            {871447840, 912275716, 501246790, -1189855544},
++            {1006915555, 1006993896, 534754653, -1078057547},
++            {1169457264, 1108394012, 565858057, -953419429},
+         };
+         if (value != crossover_value_) {
+             crossover_value_ = value;
+@@ -334,7 +337,8 @@
+             else upper_target_ = {
+                 a.g_q31 + q31::multiply(b.g_q31 - a.g_q31, fraction),
+                 a.damping_q31 + q31::multiply(b.damping_q31 - a.damping_q31, fraction),
+-                a.input_q31 + q31::multiply(b.input_q31 - a.input_q31, fraction)
++                a.input_q31 + q31::multiply(b.input_q31 - a.input_q31, fraction),
++                a.phase_q31 + q31::multiply(b.phase_q31 - a.phase_q31, fraction)
+             };
+         }
+         const auto update = [&](i32 current, i32 target) {
+@@ -344,6 +348,7 @@
+         upper_.g_q31 = update(upper_.g_q31, upper_target_.g_q31);
+         upper_.damping_q31 = update(upper_.damping_q31, upper_target_.damping_q31);
+         upper_.input_q31 = update(upper_.input_q31, upper_target_.input_q31);
++        upper_.phase_q31 = update(upper_.phase_q31, upper_target_.phase_q31);
+     }
+ 
+     static i32 pair_coefficient(i32 single) {

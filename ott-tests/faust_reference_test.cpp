@@ -8,9 +8,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 
 namespace {
+opxy::i32 crossover = opxy::q31::maximum / 2;
 constexpr double pi = 3.14159265358979323846;
 constexpr unsigned rate = 44100;
 constexpr double q31 = 2147483648.0;
@@ -34,6 +36,7 @@ bool compare(double hz, double amplitude, double depth, double time_position,
     map.setParamValue("Downward", down);
     ott::Controls controls;
     controls.character = ott::Drum;
+    controls.crossover = crossover;
     controls.level_match = 0;
     controls.depth = encode(depth);
     controls.time = encode(time_position);
@@ -84,7 +87,8 @@ bool compare(double hz, double amplitude, double depth, double time_position,
 }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2) crossover = static_cast<opxy::i32>(std::strtoll(argv[1], nullptr, 10));
     bool pass = true;
     for (double hz : {40., 88.3, 530., 2500., 9200.}) {
         for (double amplitude : {.0001, .006, .20})

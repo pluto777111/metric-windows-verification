@@ -21,3 +21,20 @@ done
 c++ "${flags[@]}" -I "$faust/include" -I "$output" \
     "$repo_dir/ott-tests/faust_reference_test.cpp" -o "$output/faust_reference_test"
 "$output/faust_reference_test"
+
+# Keep the upstream compressor math and substitute only the crossover frequency
+# so the end-of-travel tests use an independent reference at the same setting.
+for frequency in 1000 7000; do
+    edge="$output/crossover-$frequency"
+    mkdir -p "$edge"
+    sed "s/F2 = 2500.0;/F2 = $frequency.0;/" "$libraries/compressors.lib" > "$edge/edge_compressors.lib"
+    sed 's/co\.xfer_ott/library("edge_compressors.lib").xfer_ott/' \
+        "$repo_dir/ott-tests/faust_reference.dsp" > "$edge/reference.dsp"
+    "$faust/bin/faust" -lang cpp -double -cn FaustOtt -I "$edge" -I "$libraries" \
+        "$edge/reference.dsp" -o "$edge/FaustOtt.hpp"
+    c++ "${flags[@]}" -I "$faust/include" -I "$edge" \
+        "$repo_dir/ott-tests/faust_reference_test.cpp" -o "$edge/faust_reference_test"
+    position=0
+    if [[ "$frequency" == 7000 ]]; then position=2147483647; fi
+    "$edge/faust_reference_test" "$position"
+done
